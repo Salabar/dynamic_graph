@@ -1,0 +1,10 @@
+[package]
+name = "dynamic_graph"
+version = "0.1.0"
+authors = ["Salabar"]
+edition = "2018"
+
+[dependencies]
+
+[profile.dev]
+opt-level = 0
