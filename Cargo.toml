@@ -5,6 +5,7 @@ authors = ["Salabar"]
 edition = "2018"
 
 [dependencies]
+generativity = "1.0.0"
 
 [profile.dev]
 opt-level = 0

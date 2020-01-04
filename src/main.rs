@@ -1,202 +1,203 @@
-use std::collections::{VecDeque, HashMap};
+use generativity::*;
+use std::collections::HashMap;
+use core::hash::{Hash, Hasher};
+use core::mem::transmute;
+use core::marker::PhantomData;
+use core::mem::size_of;
+use core::mem::size_of_val;
 
-mod dynamic_graph;
-use crate::dynamic_graph::{Graph, AnchorMut, GraphRef};
-
-
-#[derive(Debug)]
-struct BfsNode {
-    key : i32,
-    distance : i32
+#[derive(PartialEq, Eq, Debug)]
+pub struct GraphRef<'this, 'id : 'this, E, N> {
+    node : *const GraphNode<E, N>,
+    _guard : PhantomData<&'this Guard<'id>>
 }
 
-fn breadth_first_search(gr : &mut Graph<BfsNode>) {
-    let mut anchor = gr.anchor_mut();//Guarantees we can safely store references to vertices in external collections while this is alive
-    let root =  {
-        let mut iter = anchor.iter();
-        iter.next().unwrap().0 //0 is a reference to the vertex object, 1 is reference to vertex data. Using tuple was a dumber idea than expected 
-    };
-    
-    let mut cursor = anchor.cursor_mut(root);
-    //Cursor is a mix between a pointer and an iterator. Unlike iterator, it can freely jump between elements of a graph,
-    //but unlike pointer it's only allowed to work with elements of the parent collection.
-    cursor.get_mut().distance = 0;
-    let mut queue : VecDeque<GraphRef<BfsNode>> = VecDeque::new();
-    queue.push_back(root);
+impl <'this, 'id : 'this, E, N> Hash for GraphRef<'this, 'id, E, N>  {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let ptr : usize = unsafe {
+            transmute(self.node) 
+        };
+        ptr.hash(state);
+    }
+}
 
-    while !queue.is_empty() {
-        let q = queue.pop_front().unwrap();
-        println!("Visiting {}", cursor[q].key);
-        cursor.jump(q);
-        let dist = cursor.get().distance;
+impl <'this, 'id : 'this, E, N> Clone for GraphRef<'this, 'id, E, N> {
+    fn clone(&self) -> GraphRef<'this, 'id, E, N> {
+        GraphRef { node : self.node, _guard : self._guard }
+    }
+}
 
-        for i in cursor.iter_mut() {
-            if i.1.distance == -1 {
-                queue.push_back(i.0);
-                i.1.distance = dist + 1;
-                println!("Touching {} distance {}", i.1.key, i.1.distance);
+impl <'this, 'id : 'this, E, N> Copy for GraphRef<'this, 'id, E, N> {}
+
+pub struct GraphNode<E, N> {
+    refs : HashMap<*const GraphNode<E, N>, E>,
+    payload : N
+}
+
+impl <E, N> GraphNode<E, N> {
+    fn from_payload(data : N) -> GraphNode<E, N> {
+        GraphNode { refs : HashMap::new(), payload : data }
+    }
+}
+
+pub struct Graph<E, N> {
+    root: Vec<*const GraphNode<E, N>>,
+    _ph: PhantomData<GraphNode<E, N>>
+}
+
+impl <E, N> Graph<E, N> {
+    pub fn new() -> Graph<E, N> {
+        Graph { root : Vec::new(), _ph : PhantomData }
+    }
+}
+
+pub enum CleanupStrategy {
+    Never,
+    After
+}
+
+pub struct AnchorMut<'this, 'id : 'this, E, N> {
+    parent: &'this mut Graph<E, N>,
+    strategy : CleanupStrategy,
+    _guard : &'this Guard<'id>
+}
+
+impl <'this, 'id : 'this, E, N> Graph<E, N> {
+    pub fn anchor_mut(&'this mut self, guard : &'this Guard<'id>, strategy : CleanupStrategy) -> AnchorMut<'this, 'id, E, N> {
+        AnchorMut { parent : self, _guard : guard, strategy : strategy }
+    }
+}
+
+impl <'this, 'id : 'this, E, N> AnchorMut<'this, 'id, E, N> {
+    pub fn new_detached(&mut self, payload : N) -> GraphRef<'this, 'id, E, N> {
+        let node = Box::new(GraphNode::from_payload(payload));
+        GraphRef { _guard : PhantomData, node : Box::into_raw(node) }
+    }
+
+    pub fn new(&mut self, payload : N) -> GraphRef<'this, 'id, E, N> {
+        let res = self.new_detached(payload);
+        self.attach(res);
+        res
+    }
+
+    pub fn attach(&mut self, node : GraphRef<'this, 'id, E, N>) {
+        self.parent.root.push(node.node);
+    }
+
+    pub fn detach(&mut self, index : usize) {
+        self.parent.root.swap_remove(index);
+    }
+
+    pub fn connect(&mut self, source : GraphRef<'this, 'id, E, N>, dest : GraphRef<'this, 'id, E, N>, edge : E) {
+        let ptr = source.node as *mut GraphNode<E, N>;
+        let refs = unsafe { &mut (*ptr).refs };
+        refs.insert(dest.node, edge);
+    }
+
+    pub fn disconnect(&mut self, source : GraphRef<'this, 'id, E, N>, dest : GraphRef<'this, 'id, E, N>) {
+        let ptr = source.node as *mut GraphNode<E, N>;
+        let refs = unsafe { &mut (*ptr).refs };
+        refs.remove(&dest.node);
+    }
+}
+
+pub struct IterRes<'this, 'guard : 'this, 'id : 'guard, E, N> {
+    ptr : GraphRef<'guard, 'id, E, N>,
+    node : &'this N,
+    edge : &'this E
+}
+
+pub struct CursorIterator<'guard, 'id: 'guard, Iter> {    
+    iter : Iter,
+    _guard : &'guard Guard<'id>
+}
+
+impl <'this, 'guard : 'this, 'id : 'guard, E : 'this, N : 'this, Iter : 'this> Iterator for CursorIterator<'guard, 'id, Iter>
+    where Iter : Iterator<Item = (&'this *const GraphNode<E, N>, &'this E)> {
+
+    type Item = IterRes<'this, 'guard, 'id, E, N>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(ptr) = self.iter.next() {
+            let r = GraphRef { node : *(ptr.0), _guard : PhantomData };
+            let node = *(ptr.0);
+            unsafe {
+                Some(IterRes { ptr : r, node : &(*node).payload, edge : ptr.1})
             }
+        } else {
+            None
+        }
+    }
+}
+
+pub struct RootIterator<'guard, 'id: 'guard, Iter> {    
+    iter : Iter,
+    _guard : &'guard Guard<'id>
+}
+
+impl <'this, 'guard : 'this, 'id : 'guard, E : 'this, N : 'this, Iter : 'this> Iterator for RootIterator<'guard, 'id, Iter>
+    where Iter : Iterator<Item = &'this *const GraphNode<E, N>> {
+
+    type Item = GraphRef<'guard, 'id, E, N>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(ptr) = self.iter.next() {
+            Some(GraphRef { node : *ptr, _guard : PhantomData })
+        } else {
+            None
         }
     }
 }
 
 
+/*
+struct CursorMut<'this, 'anchor : 'this, 'id : 'anchor, E, N> {
+    anchor : &'this mut AnchorMut<'anchor, 'id, E, N>,
+    current : *mut GraphNode<E, N>
+}
 
-fn test_bfs(){
-    let mut graph = Graph::<BfsNode>::new();
+
+pub struct CursorIteratorMut<Iter> {    
+    iter : Iter,
+}
+
+impl <'a, T : 'a, Iter : 'a> Iterator for CursorIteratorMut<Iter> where Iter : Iterator<Item = &'a *const GraphNode<T>> {
+    type Item = (GraphRef<T>, &'a mut T);
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(ptr) = self.iter.next() {
+            let node = *ptr;
+            let ptr = node as *mut GraphNode<T>;
+            unsafe {
+                Some((GraphRef { node : node, gen : self.gen }, &mut (*ptr).payload))
+            }
+        } else {
+            None
+        }
+    }
+}
+*/
+
+
+fn test<'a,'id : 'a>(a : &GraphRef<'a, 'id, i32, i32>, b : &GraphRef<'a, 'id, i32, i32>){
+
+}
+
+fn main() {
+//    let mut graph = Graph::<i32, i32>::new();
+    make_guard!(g);
+    make_guard!(g2);
+    let r;
+    let r2;
+    dbg!(size_of::<GraphRef<i32,i32>>());
+
     {
-        let mut anchor = graph.anchor_mut();
-        let root = anchor.add(BfsNode { key : 0, distance : -1});
-        
-        let mut cursor = anchor.cursor_mut(root);
-        //Thomas Cormen, Introduction to Algorithms 2e, pic. 22.3
 
-        let son = cursor.add_sym(BfsNode { key : 1, distance : -1});
-        
-        {
-            cursor.jump(son);
-            cursor.add_sym(BfsNode { key : 2, distance : -1});
-        }
-        cursor.jump(root);
-        let son = cursor.add_sym(BfsNode { key : 3, distance : -1});
-        {
-            cursor.jump(son);
-            let g_son1 = cursor.add_sym(BfsNode { key : 4, distance : -1});
-            let g_son2 = cursor.add_sym(BfsNode { key : 5, distance : -1});
-            
-            cursor.jump(g_son2);
+        let n = GraphNode::<i32, i32>::from_payload(123);
+        let n2 = GraphNode::<i32, i32>::from_payload(123);
+        let iter = n.refs.iter();
+        let iter2 = n2.refs.iter();
+        let mut iter = CursorIterator { iter : iter, _guard : &g};
+        let mut iter2 = CursorIterator { iter : iter2, _guard : &g2};
+        r = iter.next().unwrap().ptr;
+        r2 = iter2.next().unwrap().ptr;
 
-            cursor.attach_sym(g_son1);
-
-            let gg_son1 = cursor.add_sym(BfsNode { key : 6, distance : -1});
-            let gg_son2 = cursor.add_sym(BfsNode { key : 7, distance : -1});
-
-            cursor.jump(gg_son1);
-            cursor.attach_sym(gg_son2);
-        }
-     }
-    breadth_first_search(&mut graph);
-}
-
-
-#[derive(PartialEq, Eq)]
-struct BFNode {
-    key : usize,
-    len : HashMap<usize, usize>
-}
-
-impl BFNode {
-    fn new(key : usize) -> BFNode {
-        BFNode { key : key, len : HashMap::new() }
     }
-}
-
-fn bellman_ford(graph : &AnchorMut<BFNode>, count : usize, source : GraphRef<BFNode>) -> 
-                HashMap::<GraphRef<BFNode>, GraphRef<BFNode>>
-{
-    let mut dist = HashMap::new();
-    let mut path = HashMap::<GraphRef<_>, GraphRef<_>>::new();//(to;from)
-
-    let mut cursor = graph.cursor(source);
-    for i in cursor.iter() {
-        dist.insert(i.0, cursor.get().len[&i.1.key]);
-        path.insert(i.0, source);
-    }
-    dist.insert(source, 0);
-
-    for _ in 0..count - 1 {
-        let nodes : Vec<_> = dist.keys().map(|x| {*x}).collect();
-        for i in nodes {
-            cursor.jump(i);
-            for j in cursor.iter() {
-                let key = j.1.key;
-                if !dist.contains_key(&j.0) ||
-                    dist[&j.0] > dist[&i] + cursor[i].len[&key] {
-                    path.insert(j.0, i);
-                    dist.insert(j.0, dist[&i] + cursor[i].len[&key]);
-                }
-            }
-        }
-    }
-    path
-}
-fn print_bf_path(graph : &AnchorMut<BFNode>, path : &HashMap::<GraphRef<BFNode>, GraphRef<BFNode>>,
-                 source : GraphRef<BFNode>, target : GraphRef<BFNode>) {
-    let mut cursor = graph.cursor(target);
-    if path.contains_key(&target) {
-        let mut whole = 0;
-        while !cursor.is_at(source) {
-            let cur = cursor.at();
-            let prev = path[&cur];
-
-            let cur_key = cursor.get().key;
-            let prev_key = cursor[prev].key;
-            let len = cursor[prev].len[&cur_key];
-            whole += len;
-            println!("{} to {}, len {}", prev_key, cur_key, len);
-
-            cursor.jump(prev);
-        }
-        println!("Length {}", whole);
-    }
-    println!("_________");
-}
-
-fn shortest_path_test(){
-    let mut graph = Graph::new();
-    let mut anchor = graph.anchor_mut();
-    //Thomas Cormen, Introduction to Algorithms 2e, pic. 24.6
-
-    let source = anchor.add(BFNode::new(0));
-
-    let n1 = anchor.add(BFNode::new(1));
-    let n2 = anchor.add(BFNode::new(2));
-
-    let n3 = anchor.add(BFNode::new(3));
-    let n4 = anchor.add(BFNode::new(4));
-
-    let mut cursor = anchor.cursor_mut(source);
-    cursor.attach(n1);
-    cursor.attach(n2);
-    let r = cursor.get_mut();
-    r.len.insert(1, 10);
-    r.len.insert(2, 5);
-
-    cursor.jump(n1);
-    cursor.attach_sym(n2);
-    cursor.attach(n3);
-    let r = cursor.get_mut();
-    r.len.insert(2, 2);
-    r.len.insert(3, 1);
-
-    cursor.jump(n2);
-    cursor.attach(n3);
-    cursor.attach(n4);
-
-    let r = cursor.get_mut();
-    r.len.insert(1, 3);
-    r.len.insert(4, 2);
-    r.len.insert(3, 9);
-
-    cursor.jump(n4);
-    cursor.attach_sym(n3);
-    let r = cursor.get_mut();
-    r.len.insert(3, 6);
-    r.len.insert(0, 7);
-
-    cursor.jump(n3);
-    cursor.get_mut().len.insert(4, 4);
-
-    let path = bellman_ford(&anchor, 5, source);
-    print_bf_path(&anchor, &path, source, n1);
-    print_bf_path(&anchor, &path, source, n2);
-    print_bf_path(&anchor, &path, source, n3);
-    print_bf_path(&anchor, &path, source, n4);
-}
-
-fn main(){
-
-    test_bfs();
-    println!("");
-    shortest_path_test();
 }
