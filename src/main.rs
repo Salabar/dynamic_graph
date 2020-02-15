@@ -9,57 +9,54 @@ use core::mem::size_of;
 use core::mem::size_of_val;
 use core::ops::{Index, IndexMut};
 #[derive(PartialEq, Eq, Debug)]
-pub struct GraphRef<'id, E, N> {
-    node : *const GraphNode<E, N>,
+pub struct GraphRef<'id, N, E> {
+    node : *const GraphNode<N, E>,
     _guard : Id<'id>
 }
 
 
-impl <'id, E, N> GraphRef<'id, E, N> {
-    fn to_mut(self) -> *mut GraphNode<E, N> {
-        self.node as *mut GraphNode<E, N>
+impl <'id, N, E> GraphRef<'id, N, E> {
+    fn to_mut(self) -> *mut GraphNode<N, E> {
+        self.node as *mut GraphNode<N, E>
     }
 
-    pub fn as_raw(self) -> *const GraphNode<E, N> {
+    pub fn as_raw(self) -> *const GraphNode<N, E> {
         self.node
     }
 }
 
-impl <'id, E, N> Hash for GraphRef<'id, E, N>  {
+impl <'id, N, E> Hash for GraphRef<'id, N, E>  {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let ptr : usize = unsafe {
-            transmute(self.node) 
-        };
-        ptr.hash(state);
+        self.node.hash(state);
     }
 }
 
-impl <'id, E, N> Clone for GraphRef<'id, E, N> {
-    fn clone(&self) -> GraphRef<'id, E, N> {
+impl <'id, N, E> Clone for GraphRef<'id, N, E> {
+    fn clone(&self) -> GraphRef<'id, N, E> {
         GraphRef { node : self.node, _guard : self._guard }
     }
 }
 
-impl <'id, E, N> Copy for GraphRef<'id, E, N> {}
+impl <'id, N, E> Copy for GraphRef<'id, N, E> {}
 
-pub struct GraphNode<E, N> {
-    refs : HashMap<*const GraphNode<E, N>, E>,
+pub struct GraphNode<N, E> {
+    refs : HashMap<*const GraphNode<N, E>, E>,
     payload : N
 }
 
-impl <E, N> GraphNode<E, N> {
-    fn from_payload(data : N) -> GraphNode<E, N> {
+impl <N, E> GraphNode<N, E> {
+    fn from_payload(data : N) -> GraphNode<N, E> {
         GraphNode { refs : HashMap::new(), payload : data }
     }
 }
 
-pub struct Graph<E, N> {
-    root: Vec<*const GraphNode<E, N>>,
-    _ph: PhantomData<GraphNode<E, N>>
+pub struct Graph<N, E> {
+    root: Vec<*const GraphNode<N, E>>,
+    _ph: PhantomData<GraphNode<N, E>>
 }
 
-impl <E, N> Graph<E, N> {
-    pub fn new() -> Graph<E, N> {
+impl <N, E> Graph<N, E> {
+    pub fn new() -> Graph<N, E> {
         Graph { root : Vec::new(), _ph : PhantomData }
     }
 }
@@ -69,8 +66,8 @@ pub enum CleanupStrategy {
 }
 
 
-pub struct AnchorMut<'this, 'id : 'this, E : 'this, N : 'this> {
-    //Theorem Q: dereferencing GraphRef in every function typed 
+pub struct AnchorMut<'this, 'id : 'this, N : 'this, E : 'this> {
+    //Theorem Q: dereferencing GraphRef in every non-recursive function typed 
     //   (&'_ self, GraphRef<'id>, ...) -> &_
     //   (&'_mut self, GraphRef<'id>, ...) -> &'_mut
     //   (&'_mut self, GraphRef<'id>, ..). -> ()
@@ -82,57 +79,53 @@ pub struct AnchorMut<'this, 'id : 'this, E : 'this, N : 'this> {
         //(a) GraphRef can only be used with an Anchor or AnchorMut of the same 'id
         //(b) GraphRef cannot be dereferenced directly
         //(c) Consecutive calls of the functions will invalidate each others outputs as per Rust borrowing rules
-    parent: &'this mut Graph<E, N>,
+    parent: &'this mut Graph<N, E>,
     strategy : CleanupStrategy,
     _guard : Id<'id>
 }
 
 
-impl <'this, 'id: 'this, E : 'this, N : 'this> Drop for AnchorMut<'this, 'id, E, N> {
+impl <'this, 'id: 'this, N : 'this, E : 'this> Drop for AnchorMut<'this, 'id, N, E> {
     fn drop(&mut self){}
 }
 
-impl <'id, E, N> Graph<E, N> {
-    pub fn anchor_mut(&mut self, guard : Id<'id>, strategy : CleanupStrategy) -> AnchorMut<'_, 'id, E, N> {
+impl <'id, N, E> Graph<N, E> {
+    pub fn anchor_mut(&mut self, guard : Id<'id>, strategy : CleanupStrategy) -> AnchorMut<'_, 'id, N, E> {
         AnchorMut { parent : self, _guard : guard, strategy : strategy }
     }
 }
 
 
-impl <'this, 'id : 'this, E : 'this, N : 'this> Index<GraphRef<'id, E, N>> for AnchorMut<'this, 'id, E, N> {
+impl <'this, 'id : 'this, N : 'this, E : 'this> Index<GraphRef<'id, N, E>> for AnchorMut<'this, 'id, N, E> {
     type Output = N;
-    fn index(&self, target : GraphRef<'id, E, N>) -> &Self::Output {
+    fn index(&self, target : GraphRef<'id, N, E>) -> &Self::Output {
         //(Q)
-        let that =  unsafe {
-            &*target.node
-        };
+        let that =  unsafe { &*target.node };
         &that.payload
     }
 }
 
-impl <'this, 'id : 'this, E : 'this, N : 'this> IndexMut<GraphRef<'id, E, N>> for AnchorMut<'this, 'id, E, N> {
-    fn index_mut(&mut self, target : GraphRef<'id, E, N>) -> &mut Self::Output {
+impl <'this, 'id : 'this, N : 'this, E : 'this> IndexMut<GraphRef<'id, N, E>> for AnchorMut<'this, 'id, N, E> {
+    fn index_mut(&mut self, target : GraphRef<'id, N, E>) -> &mut Self::Output {
         //(Q)
-        let that =  unsafe {
-            &mut *target.to_mut()
-        };
+        let that =  unsafe { &mut *target.to_mut() };
         &mut that.payload
     }
 }
 
-impl <'this, 'id : 'this, E : 'this, N : 'this> AnchorMut<'this, 'id, E, N> {
-    pub fn spawn_detached(&mut self, payload : N) -> GraphRef<'id, E, N> {
+impl <'this, 'id : 'this, N : 'this, E : 'this> AnchorMut<'this, 'id, N, E> {
+    pub fn spawn_detached(&mut self, payload : N) -> GraphRef<'id, N, E> {
         let node = Box::new(GraphNode::from_payload(payload));
         GraphRef { _guard : self._guard, node : Box::into_raw(node) }
     }
 
-    pub fn spawn(&mut self, payload : N) -> GraphRef<'id, E, N> {
+    pub fn spawn(&mut self, payload : N) -> GraphRef<'id, N, E> {
         let res = self.spawn_detached(payload);
         self.attach(res);
         res
     }
 
-    pub fn attach(&mut self, node : GraphRef<'id, E, N>) {
+    pub fn attach(&mut self, node : GraphRef<'id, N, E>) {
         self.parent.root.push(node.node);
     }
 
@@ -140,21 +133,21 @@ impl <'this, 'id : 'this, E : 'this, N : 'this> AnchorMut<'this, 'id, E, N> {
         self.parent.root.swap_remove(index);
     }
 
-    pub fn connect(&mut self, source : GraphRef<'id, E, N>, dest : GraphRef<'id, E, N>, edge : E) {
+    pub fn connect(&mut self, source : GraphRef<'id, N, E>, dest : GraphRef<'id, N, E>, edge : E) {
         let ptr = source.to_mut();
         //(Q)
         let refs = unsafe { &mut (*ptr).refs };
         refs.insert(dest.node, edge);
     }
 
-    pub fn disconnect(&mut self, source : GraphRef<'id, E, N>, dest : GraphRef<'id, E, N>) {
+    pub fn disconnect(&mut self, source : GraphRef<'id, N, E>, dest : GraphRef<'id, N, E>) {
         let ptr = source.to_mut();
         //(Q)
         let refs = unsafe { &mut (*ptr).refs };
         refs.remove(&dest.node);
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = RootIterRes<'_, 'id, E, N>> {
+    pub fn iter(&self) -> impl Iterator<Item = RootIterRes<'_, 'id, N, E>> {
         let g = self._guard;
         self.parent.root.iter().map(move |x| {
             let x = *x;
@@ -164,79 +157,63 @@ impl <'this, 'id : 'this, E : 'this, N : 'this> AnchorMut<'this, 'id, E, N> {
         })
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = RootIterMutRes<'_, 'id, E, N>> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = RootIterMutRes<'_, 'id, N, E>> {
         let g = self._guard;
         self.parent.root.iter_mut().map(move |x| {
             let x = *x;
             let p =  GraphRef { node : x, _guard : g };
-            let x = x as *mut GraphNode<E, N>;
+            let x = x as *mut GraphNode<N, E>;
             let payload = unsafe { &mut (*x).payload };
             RootIterMutRes { ptr : p, node : payload }
         })
     }
 
-    pub fn cursor_mut(&mut self, target : GraphRef<'id, E, N>) -> CursorMut<'_, 'this, 'id, E, N> {
+    pub fn cursor_mut(&mut self, target : GraphRef<'id, N, E>) -> CursorMut<'_, 'this, 'id, N, E> {
         CursorMut { anchor : self, current : target.to_mut() }
     }
 
-    pub fn cursor(&self, target : GraphRef<'id, E, N>) -> Cursor<'_, 'this, 'id, E, N> {
+    pub fn cursor(&self, target : GraphRef<'id, N, E>) -> Cursor<'_, 'this, 'id, N, E> {
         Cursor { anchor : self, current : target.node }
     }
 }
 
-pub struct IterRes<'this, 'id : 'this, E : 'this, N : 'this> {
-    ptr : GraphRef<'id, E, N>,
+pub struct IterRes<'this, 'id : 'this, N : 'this, E : 'this> {
+    ptr : GraphRef<'id, N, E>,
     node : &'this N,
     edge : &'this E
 }
 
-pub struct RootIterRes<'this, 'id : 'this, E : 'this, N : 'this> {
-    ptr : GraphRef<'id, E, N>,
+pub struct RootIterRes<'this, 'id : 'this, N : 'this, E : 'this> {
+    ptr : GraphRef<'id, N, E>,
     node : &'this N,
 }
 
-pub struct IterMutRes<'this, 'id : 'this, E : 'this, N : 'this> {
-    ptr : GraphRef<'id, E, N>,
+pub struct IterMutRes<'this, 'id : 'this, N : 'this, E : 'this> {
+    ptr : GraphRef<'id, N, E>,
     node : &'this mut N,
     edge : &'this mut E
 }
 
-pub struct RootIterMutRes<'this, 'id : 'this, E : 'this, N : 'this> {
-    ptr : GraphRef<'id, E, N>,
+pub struct RootIterMutRes<'this, 'id : 'this, N : 'this, E : 'this> {
+    ptr : GraphRef<'id, N, E>,
     node : &'this mut N,
 }
 
-pub struct CursorMut<'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this> {
-    anchor : &'this mut AnchorMut<'anchor, 'id, E, N>,
-    current : *mut GraphNode<E, N>
+pub struct CursorMut<'this, 'anchor : 'this, 'id : 'anchor, N : 'this, E : 'this> {
+    //(Q) applies due to Rust borrowing rules
+    anchor : &'this mut AnchorMut<'anchor, 'id, N, E>,
+    current : *mut GraphNode<N, E>
 }
-/*
-trait CursorTrait<'a, 'anchor : 'a, 'id : 'anchor, E : 'a, N : 'a> {
-    fn iter<Iter : 'a>(&'a self) -> Iter where Iter : Iterator<Item = IterRes<'a, 'id, E, N>>;
-}
-impl <'a, 'this : 'a, 'anchor : 'this, 'id: 'anchor, E : 'this, N : 'this> CursorTrait<'a, 'anchor, 'id, E, N>
-for CursorMut<'this, 'anchor, 'id, E, N> {
-    fn iter<Iter : 'a>(&'a self) -> Iter where Iter : Iterator<Item = IterRes<'a, 'id, E, N>> {        let current = self.current as *const GraphNode<E, N>;
-        let node = unsafe { &(*current) };
-        node.refs.iter().map(|x| {
-            //(W)
-            let ptr = *(x.0);
-            let p =  unsafe { GraphRef { node : ptr, _guard : Id::new() } };
-            let node = unsafe { &(*ptr) };
-            let payload = &node.payload;
-            IterRes { ptr : p, node : payload, edge : x.1 }
-        })
-    }
-}
-*/
-impl <'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this >
-    CursorMut<'this, 'anchor, 'id, E, N> {
 
-    pub fn iter(&self) -> impl Iterator<Item = IterRes<'_, 'id, E, N>> {
-        let current = self.current as *const GraphNode<E, N>;
-        let node = unsafe { &(*current) };
+
+impl <'this, 'anchor : 'this, 'id : 'anchor, N : 'this, E : 'this >
+CursorMut<'this, 'anchor, 'id, N, E> {
+
+    pub fn iter(&self) -> impl Iterator<Item = IterRes<'_, 'id, N, E>> {
+        let current = self.current as *const GraphNode<N, E>;
+        let node_refs = unsafe { &(*current).refs };
         let g = self.anchor._guard;
-        node.refs.iter().map(move |x| {
+        node_refs.iter().map(move |x| {
             let ptr = *(x.0);
             let p =  GraphRef { node : ptr, _guard : g };
             let node = unsafe { &(*ptr) };
@@ -245,14 +222,12 @@ impl <'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this >
         })
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = IterMutRes<'_, 'id, E, N>> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = IterMutRes<'_, 'id, N, E>> {
         let current = self.current;
-        //this reference is dropped before closure below is ever executed and therefore
-        //there is no aliasing
-        let node = unsafe { &mut (*current) };
+        let node_refs = unsafe { &mut (*current).refs };
         let g = self.anchor._guard;
-        node.refs.iter_mut().map(move |x| {
-            let ptr = *(x.0) as *mut GraphNode<E, N>;
+        node_refs.iter_mut().map(move |x| {
+            let ptr = *(x.0) as *mut GraphNode<N, E>;
             let p =  GraphRef { node : ptr, _guard : g };
             let node = unsafe { &mut (*ptr) };
             let payload = &mut node.payload;
@@ -260,12 +235,12 @@ impl <'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this >
         })
     }
 
-    pub fn at(&self) -> GraphRef<'id, E, N> {
-        GraphRef { node : self.current as *const GraphNode<E, N>, _guard : self.anchor._guard }
+    pub fn at(&self) -> GraphRef<'id, N, E> {
+        GraphRef { node : self.current as *const GraphNode<N, E>, _guard : self.anchor._guard }
     }
 
-    pub fn is_at(&self, target : GraphRef<'id, E, N>) -> bool {
-        target.node == self.current as *const GraphNode<E, N>
+    pub fn is_at(&self, target : GraphRef<'id, N, E>) -> bool {
+        target.node == self.current as *const GraphNode<N, E>
     }
 
     pub fn get(&self) -> &N {
@@ -278,10 +253,9 @@ impl <'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this >
         &mut self.anchor[this]
     }
     
-    pub fn bridge(&mut self, target : GraphRef<'id, E, N>) -> Option<(&mut N, &mut N)> {
+    pub fn bridge(&mut self, target : GraphRef<'id, N, E>) -> Option<(&mut N, &mut N)> {
         let that = target.to_mut();
         if self.current != that {
-            //(Q) applies due to Rust borrowing rules
             //Branch condition guarantees there is no aliasing
             let this = unsafe { &mut (*self.current).payload };
             let that = &mut self.anchor[target];
@@ -291,10 +265,10 @@ impl <'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this >
         }
     }
 
-    pub fn get_edge(&self, target : GraphRef<'id, E, N>) -> Option<IterRes<'_, 'id, E, N>> {
-        let this = self.current as *const GraphNode<E, N>;
-        let this = unsafe { &*this };
-        if let Some(e) = this.refs.get(&target.node) {
+    pub fn get_edge(&self, target : GraphRef<'id, N, E>) -> Option<IterRes<'_, 'id, N, E>> {
+        let this = self.current as *const GraphNode<N, E>;
+        let this_refs = unsafe { &(*this).refs };
+        if let Some(e) = this_refs.get(&target.node) {
             let node = &self.anchor[target];
             Some(IterRes { ptr : target, edge : e, node : node})
         } else {
@@ -302,11 +276,11 @@ impl <'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this >
         }
     }
 
-    pub fn get_edge_mut(&mut self, target : GraphRef<'id, E, N>) -> Option<IterMutRes<'_, 'id, E, N>> {
-        let this = self.current as *mut GraphNode<E, N>;
-        let this = unsafe { &mut *this };
+    pub fn get_edge_mut(&mut self, target : GraphRef<'id, N, E>) -> Option<IterMutRes<'_, 'id, N, E>> {
+        let this = self.current as *mut GraphNode<N, E>;
+        let this_refs = unsafe { &mut (*this).refs };
         //(Q)
-        if let Some(e) = this.refs.get_mut(&target.node) {
+        if let Some(e) = this_refs.get_mut(&target.node) {
             let node = unsafe { &mut (*target.to_mut()).payload };
             Some(IterMutRes { ptr : target, edge : e, node : node})
         } else {
@@ -314,48 +288,46 @@ impl <'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this >
         }
     }
 
-    pub fn attach(&mut self, target : GraphRef<'id, E, N>, edge : E) {
+    pub fn attach(&mut self, target : GraphRef<'id, N, E>, edge : E) {
         let this = self.at();
         self.anchor.connect(this, target, edge);
     }
 
-    pub fn detach(&mut self, target : GraphRef<'id, E, N>, edge : E) {
+    pub fn detach(&mut self, target : GraphRef<'id, N, E>, edge : E) {
         let this = self.at();
         self.anchor.disconnect(this, target);
     }
 
-    pub fn attach_to(&mut self, target : GraphRef<'id, E, N>, edge : E) {
+    pub fn attach_to(&mut self, target : GraphRef<'id, N, E>, edge : E) {
         let this = self.at();
         self.anchor.connect(target, this, edge);
     }
 
-    pub fn detach_from(&mut self, target : GraphRef<'id, E, N>) {
+    pub fn detach_from(&mut self, target : GraphRef<'id, N, E>) {
         let this = self.at();
         self.anchor.disconnect(target, this);
     }
 
-    pub fn jump(&mut self, target : GraphRef<'id, E, N>) {
-        self.current = target.node as *mut GraphNode<E, N>;
+    pub fn jump(&mut self, target : GraphRef<'id, N, E>) {
+        self.current = target.node as *mut GraphNode<N, E>;
     }
-
-    
 
 }
 
 /////////TODO: Utilize traits and/or macros to remove duplication
-pub struct Cursor<'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this> {
-    anchor : &'this AnchorMut<'anchor, 'id, E, N>,
-    current : *const GraphNode<E, N>
+pub struct Cursor<'this, 'anchor : 'this, 'id : 'anchor, N : 'this, E : 'this> {
+    anchor : &'this AnchorMut<'anchor, 'id, N, E>,
+    current : *const GraphNode<N, E>
 }
 
-impl <'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this >
-    Cursor<'this, 'anchor, 'id, E, N> {
+impl <'this, 'anchor : 'this, 'id : 'anchor, N : 'this, E : 'this >
+Cursor<'this, 'anchor, 'id, N, E> {
 
-    pub fn iter(&self) -> impl Iterator<Item = IterRes<'_, 'id, E, N>> {
-        let current = self.current as *const GraphNode<E, N>;
-        let node = unsafe { &(*current) };
+    pub fn iter(&self) -> impl Iterator<Item = IterRes<'_, 'id, N, E>> {
+        let current = self.current as *const GraphNode<N, E>;
+        let node_refs = unsafe { &(*current).refs };
         let g = self.anchor._guard;
-        node.refs.iter().map(move|x| {
+        node_refs.iter().map(move|x| {
             let ptr = *(x.0);
             let p =  GraphRef { node : ptr, _guard : g };
             let node = unsafe { &(*ptr) };
@@ -364,12 +336,12 @@ impl <'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this >
         })
     }
 
-    pub fn at(&self) -> GraphRef<'id, E, N> {
-        GraphRef { node : self.current as *const GraphNode<E, N>, _guard : self.anchor._guard }
+    pub fn at(&self) -> GraphRef<'id, N, E> {
+        GraphRef { node : self.current as *const GraphNode<N, E>, _guard : self.anchor._guard }
     }
 
-    pub fn is_at(&self, target : GraphRef<'id, E, N>) -> bool {
-        target.node == self.current as *const GraphNode<E, N>
+    pub fn is_at(&self, target : GraphRef<'id, N, E>) -> bool {
+        target.node == self.current as *const GraphNode<N, E>
     }
 
     pub fn get(&self) -> &N {
@@ -377,14 +349,14 @@ impl <'this, 'anchor : 'this, 'id : 'anchor, E : 'this, N : 'this >
         &self.anchor[this]
     }
 
-    pub fn jump(&mut self, target : GraphRef<'id, E, N>) {
+    pub fn jump(&mut self, target : GraphRef<'id, N, E>) {
         self.current = target.node;
     }
 
-    pub fn get_edge(&self, target : GraphRef<'id, E, N>) -> Option<IterRes<'_, 'id, E, N>> {
-        let this = self.current as *const GraphNode<E, N>;
-        let this = unsafe { &*this };
-        if let Some(e) = this.refs.get(&target.node) {
+    pub fn get_edge(&self, target : GraphRef<'id, N, E>) -> Option<IterRes<'_, 'id, N, E>> {
+        let this = self.current as *const GraphNode<N, E>;
+        let this_refs = unsafe { &(*this).refs };
+        if let Some(e) = this_refs.get(&target.node) {
             let node = unsafe { &(*target.node).payload };
             Some(IterRes { ptr : target, edge : e, node : node})
         } else {
@@ -399,7 +371,7 @@ struct BfsNode {
 }
 
 
-fn breadth_first_search(gr : &mut Graph<(), BfsNode>) {
+fn breadth_first_search(gr : &mut Graph<BfsNode, ()>) {
     make_guard!(g);
     let mut anchor = gr.anchor_mut(Id::from(g), CleanupStrategy::Never);
     let root =  {
@@ -431,7 +403,7 @@ fn breadth_first_search(gr : &mut Graph<(), BfsNode>) {
 }
 
 fn test_bfs() {
-    let mut graph = Graph::<(), BfsNode>::new();
+    let mut graph = Graph::<BfsNode, ()>::new();
     {
         make_guard!(g);
         let mut anchor = graph.anchor_mut(Id::from(g), CleanupStrategy::Never);
