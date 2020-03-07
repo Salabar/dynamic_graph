@@ -696,7 +696,7 @@ fn print_bf_path<'id, 'a>(graph : &AnchorMut<'a, 'id, VecGraph<HashNode<usize, u
     }
     println!("_________");
 }
-
+ 
 fn shortest_path_test(){
     let mut graph = VecGraph::new();
     make_guard!(g);
