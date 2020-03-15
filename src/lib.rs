@@ -292,7 +292,7 @@ pub struct GenericGraph<Root, NodeType> {
     root : Root
 }
 
-pub type VecGraph<T> = GenericGraph<Vec<*const T>, T>;
+pub type VecGraph<T> = GenericGraph<Vec<NonNull<T>>, T>;
 
 impl <Root : Default, NodeType> Default for GenericGraph<Root, NodeType> {
     fn default() -> Self {
@@ -471,7 +471,7 @@ where NodeType : GraphNode<Node = N, Edge = E>
 
     /// Attaches `dst` to the root using Vec::push.
     pub fn attach(&mut self, dst : GraphPtr<'id, NodeType>) {
-        self.parent.root.push(dst.as_ptr());
+        self.parent.root.push(dst.node);
     }
 
     /// Detaches a node from the root using Vec::swap_remove.
@@ -483,7 +483,7 @@ where NodeType : GraphNode<Node = N, Edge = E>
     pub fn iter(&self) -> impl Iterator<Item = (&'_ N, GraphPtr<'id, NodeType>)> {
         let g = self._guard;
         self.parent.root.iter().map(move |x| {
-            let x = *x;
+            let x = x.as_ptr() as *const NodeType;
             let p =  unsafe { GraphPtr::from_ptr(x, g) };
             let payload = unsafe { (*x).get() };
             (payload, p)
@@ -494,7 +494,7 @@ where NodeType : GraphNode<Node = N, Edge = E>
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&'_ mut N, GraphPtr<'id, NodeType>)> {
         let g = self._guard;
         self.parent.root.iter_mut().map(move |x| {
-            let x = *x as *mut NodeType;
+            let x = x.as_ptr();
             let p =  unsafe { GraphPtr::from_mut(x, g) };
             //this won't alias since each next() will invalidate the previous one.
             let payload = unsafe { (*x).get_mut() };
