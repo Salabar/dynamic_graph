@@ -372,7 +372,7 @@ where NodeType : GraphNode<Node = N, Edge = E>
     /// Creates a checked pointer from a raw pointer
     ///# Safety
     /// Caller must guarantee `raw` points to a node which was not cleaned up and belongs to the parent graph 
-    pub unsafe fn ref_from_ptr(&self, raw : *const NodeType) -> GraphPtr<'id, NodeType> {
+    pub unsafe fn gptr_from_ptr(&self, raw : *const NodeType) -> GraphPtr<'id, NodeType> {
         GraphPtr::from_ptr(raw, self._guard)
     }
     /// Creates an immutable cursor pointing to `dst`
