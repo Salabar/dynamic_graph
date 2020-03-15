@@ -1,8 +1,12 @@
 [package]
 name = "dynamic_graph"
-version = "0.1.0"
-authors = ["Salabar"]
+version = "0.0.1"
+authors = ["Maskim Chistyakov"]
 edition = "2018"
+license = "MIT"
+description = "A library for graph processing"
+repository = "https://github.com/Salabar/dynamic_graph/"
+readme = "README.md"
 
 [dependencies]
 generativity = "1.0.0"
