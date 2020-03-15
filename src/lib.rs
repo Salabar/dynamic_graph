@@ -73,7 +73,7 @@ pub type NamedNode<N, E> = GenericNode<N, HashMap<*const NamedNode<N, E>, E>>;
 #[derive(PartialEq, Eq)]
 #[repr(C)]
 pub struct NamedNode<N, E> {
-    refs : HashMap<*const NamedNode<N, E>, E>,
+    refs : HashMap<NonNull<NamedNode<N, E>>, E>,
     payload : N,
 }
 
@@ -235,12 +235,12 @@ where NodeType : GraphNode<Node = N, Edge = E>
 impl <N, E> GraphRaw<NamedNode<N, E>> {
     fn connect<'id>(&mut self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>, edge : E) {
         let refs = unsafe { &mut (*src.as_mut()).refs };
-        refs.insert(dst.as_ptr(), edge);
+        refs.insert(dst.node, edge);
     }
 
     fn disconnect<'id>(&mut self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>) {
         let refs = unsafe { &mut (*src.as_mut()).refs };
-        refs.remove(&dst.as_ptr());
+        refs.remove(&dst.node);
     }
 
     fn get_edge<'id>(&self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ N, &'_ E>> {
@@ -249,7 +249,7 @@ impl <N, E> GraphRaw<NamedNode<N, E>> {
         let this_refs = &this.refs;
         let this = &this.payload;
         
-        if let Some(e) = this_refs.get(&dst.as_ptr()) {
+        if let Some(e) = this_refs.get(&dst.node) {
             if src == dst {
                 Some(Loop(EdgeSingle { this, edge : &e }))
             } else {
@@ -268,7 +268,7 @@ impl <N, E> GraphRaw<NamedNode<N, E>> {
         let this_refs = &mut this.refs;
         let this = &mut this.payload;
         
-        if let Some(e) = this_refs.get_mut(&(dst.as_ptr())) {
+        if let Some(e) = this_refs.get_mut(&dst.node) {
             if src == dst {
                 Some(Loop(EdgeSingle { this, edge : e }))
             } else {
@@ -551,7 +551,7 @@ macro_rules! impl_cursor_immutable {
         
                 let node_refs = unsafe { &(*current).refs };
                 node_refs.iter().map(move |x| {
-                    let ptr = *(x.0);
+                    let ptr = (x.0).as_ptr() as *const NamedNode<N, E>;
                     let p =  unsafe { GraphPtr::from_ptr(ptr, g) };
                     let that = unsafe { (*ptr).get() };
 
@@ -612,7 +612,7 @@ CursorMut<'this, 'id, NamedNode<N, E>>
         //*current is dropped before closure is ever invoked and does not alias
         let node_refs = unsafe { &mut (*current).refs };
         node_refs.iter_mut().map(move |x| {
-            let ptr = *(x.0) as *mut NamedNode<N, E>;
+            let ptr = (x.0).as_ptr();
             let p =  unsafe { GraphPtr::from_mut(ptr, g) };
             let that = unsafe { (*ptr).get_mut() };
 

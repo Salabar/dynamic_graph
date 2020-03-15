@@ -135,8 +135,6 @@ fn test_bfs() {
         
         anchor.connect(vec[6], vec[7], ());
         anchor.connect(vec[7], vec[6], ());
-
-        let c = anchor.cursor(vec[0]);
     }
     breadth_first_search(&mut graph);
 }

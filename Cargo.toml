@@ -1,6 +1,6 @@
 [package]
 name = "dynamic_graph"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["Maskim Chistyakov"]
 edition = "2018"
 license = "MIT"
