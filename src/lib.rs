@@ -7,53 +7,65 @@ use core::ptr::NonNull;
 use core::hint::unreachable_unchecked;
 
 /// A checked pointer type used to access and traverse graph nodes in the crate. This pointer cannot be dereferenced
-/// directly and requires an anchor object to access the data stored in the collection. Thanks to 'generativity'
-/// crate this pointer can only be used with and created from an anchor branded with the same `'id` and cannot
-/// be used once parent anchor is dropped.
+/// and requires the parent anchor object to access the data stored in the collection.
 #[repr(transparent)]
-#[derive(Eq)]
 pub struct GraphPtr<'id, T> {
     node : NonNull<T>,
     _guard : Id<'id>
 }
 
 impl <'id, T> PartialEq for GraphPtr<'id, T> {
-    fn eq(&self, other : &Self) -> bool {
+    fn eq(&self, other : &Self) -> bool
+    {
         self.node == other.node
     }
 }
 
+impl <'id, T> Eq for GraphPtr<'id, T> {}
+
+
 impl <'id, T> GraphPtr<'id, T> {
-    fn as_mut(self) -> *mut T {
+    fn as_mut(self) -> *mut T
+    {
         self.node.as_ptr()
     }
 
     /// Returns a raw pointer to the graph node. This pointer should not be dereferenced directly and is meant
     /// to be a way to cache GraphPtrs between cleanups. You must ensure the node behind this pointer
     /// will not be deleted when the parent anchor is dropped
-    pub fn as_ptr(self) -> *const T {
+    pub fn as_ptr(self) -> *const T
+    {
         self.node.as_ptr() as *const T
     }
 
     //ptr must be a valid pointer.
     //node behind ptr must belong to the same graph as an 'id branded anchor.
-    unsafe fn from_mut(ptr : *mut T, guard : Id<'id>) -> Self {
+    unsafe fn from_mut(ptr : *mut T, guard : Id<'id>) -> Self
+    {
         GraphPtr { node : NonNull::new_unchecked(ptr), _guard : guard }
     }
 
-    unsafe fn from_ptr(ptr : *const T, guard : Id<'id>) -> Self {
+    unsafe fn from_ptr(ptr : *const T, guard : Id<'id>) -> Self
+    {
         GraphPtr { node : NonNull::new_unchecked(ptr as *mut T), _guard : guard }
+    }
+
+    unsafe fn make_static(self) -> GraphPtr<'static, T>
+    {
+        transmute(self)
     }
 }
 
 impl <'id, T> Hash for GraphPtr<'id, T>  {
-    fn hash<H: Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H)
+    {
         self.node.hash(state);
     }
 }
 
 impl <'id, T> Clone for GraphPtr<'id, T> {
-    fn clone(&self) -> GraphPtr<'id, T> {
+    fn clone(&self) -> GraphPtr<'id, T>
+    {
         GraphPtr { node : self.node, _guard : self._guard }
     }
 }
@@ -64,7 +76,7 @@ impl <'id, T> Copy for GraphPtr<'id, T> {}
 #[derive(PartialEq, Eq)]
 pub struct GenericNode<N, T> {
     refs : T,
-    payload : N,
+    data : N,
 }
 pub type NamedNode<N, E> = GenericNode<N, HashMap<*const NamedNode<N, E>, E>>;
 */
@@ -73,19 +85,29 @@ pub type NamedNode<N, E> = GenericNode<N, HashMap<*const NamedNode<N, E>, E>>;
 #[derive(PartialEq, Eq)]
 #[repr(C)]
 pub struct NamedNode<N, E> {
-    refs : HashMap<NonNull<NamedNode<N, E>>, E>,
-    payload : N,
+    refs : HashMap<GraphPtr<'static, NamedNode<N, E>>, E>,
+    data : N,
+    service : ServiceData,
 }
 
-/// Part of the experimental API which allows a user to modify the contents of the collection directly.
-/// This API relies on undefined behavior and should not be used.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum CleanupGen {
+    Even, Odd
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub struct ServiceData {
+    cleanupGen : CleanupGen,
+    storeIndex: usize,
+}
+
 pub mod node_views {
     use super::*;
 
     #[repr(C)]
     pub struct NamedNode<'id, N, E> {
         pub refs : HashMap<GraphPtr<'id, super::NamedNode<N, E>>, E>,
-        pub payload : N,
+        pub data : N,
     }
 }
 
@@ -94,24 +116,41 @@ pub trait GraphNode : Sized {
     type Edge;
     fn get(&self) -> &Self::Node;
     fn get_mut(&mut self) -> &mut Self::Node;
-    fn from_payload(data : Self::Node) -> Self;
+
+    fn service(&self) -> &ServiceData;
+    fn service_mut(&mut self) -> &mut ServiceData;
+
+    fn from_data(data : Self::Node) -> Self;
 }
 
 impl <N, E> GraphNode for NamedNode<N, E> {
     type Node = N;
     type Edge = E;
 
-    fn get(&self) -> &Self::Node {
-        &self.payload
+    fn get(&self) -> &Self::Node
+    {
+        &self.data
     }
 
-    fn get_mut(&mut self) -> &mut Self::Node {
-        &mut self.payload
+    fn get_mut(&mut self) -> &mut Self::Node
+    {
+        &mut self.data
     }
 
-    fn from_payload(data : Self::Node) -> Self {
-        NamedNode { refs : HashMap::new(), payload : data }
+    fn from_data(data : Self::Node) -> Self
+    {
+        let service = ServiceData { cleanupGen : CleanupGen::Even, storeIndex : 0 };
+        NamedNode { refs : HashMap::new(), data, service }
     }
+
+    fn service(&self) -> &ServiceData {
+        &self.service
+    }
+    
+    fn service_mut(&mut self) -> &mut ServiceData {
+        &mut self.service
+    }
+
 }
 
 pub struct GraphIterRes<E, T> {
@@ -134,7 +173,7 @@ pub struct EdgeSingle<N, E> {
     ///Value from the edge.
     pub edge : E
 }
-///View into two nodes connected by an edge. Takes into account the case when both nodes are the same.
+///View into nodes data connected by an edge. Both if the edge connects two different nodes and Loop if the edge loops back to the source node.
 pub enum Edge<N, E> {
     Both(EdgeBoth<N, E>),
     Loop(EdgeSingle<N, E>),
@@ -145,7 +184,8 @@ pub use crate::Edge::Loop;
 
 impl <N, E> Edge<N, E> {
     ///Returns data from the source node and the edge.
-    pub fn this(self) -> EdgeSingle<N, E> {
+    pub fn this(self) -> EdgeSingle<N, E>
+    {
         match self {
             Both(s) => EdgeSingle { this : s.this, edge : s.edge },
             Loop(s) => s,
@@ -153,7 +193,8 @@ impl <N, E> Edge<N, E> {
     }
 
     ///Returns data from the destination node and the edge.
-    pub fn that(self) -> EdgeSingle<N, E> {
+    pub fn that(self) -> EdgeSingle<N, E>
+    {
         match self {
             Both(s) => EdgeSingle { this : s.that, edge : s.edge },
             Loop(s) => s,
@@ -161,7 +202,8 @@ impl <N, E> Edge<N, E> {
     }
 
     ///Returns data from both nodes and the edge. Panics if self is a Loop.
-    pub fn unwrap(self) -> EdgeBoth<N, E> {
+    pub fn unwrap(self) -> EdgeBoth<N, E>
+    {
         match self {
             Both(s) => s,
             _ => panic!("called `Edge::unwrap()` on a `Loop` value"),
@@ -170,8 +212,9 @@ impl <N, E> Edge<N, E> {
 
     /// Returns data from both nodes and the edge. Undefined behavior if self is a Loop.
     /// # Safety
-    /// Caller must guarantee value of self to be Both
-    pub unsafe fn unwrap_unchecked(self) -> EdgeBoth<N, E> {
+    /// Caller must guarantee value of self to be Both.
+    pub unsafe fn unwrap_unchecked(self) -> EdgeBoth<N, E>
+    {
         match self {
             Both(s) => s,
             _ => unreachable_unchecked(),
@@ -182,13 +225,17 @@ impl <N, E> Edge<N, E> {
 #[derive(PartialEq, Eq)]
 pub struct GraphRaw<T> {
     data : Vec<Box<T>>,
+    cleanupGen : CleanupGen,
 }
 
-impl <N, E, NodeType> GraphRaw<NodeType>
+impl <'a, N : 'a, E : 'a, NodeType> GraphRaw<NodeType>
 where NodeType : GraphNode<Node = N, Edge = E>
 {
-    fn spawn_detached(&mut self, payload : N) -> *const NodeType {
-        let node = Box::new(NodeType::from_payload(payload));
+    fn spawn_detached(&mut self, data : N) -> *const NodeType
+    {
+        let mut node = Box::new(NodeType::from_data(data));
+        node.service_mut().storeIndex = self.data.len();
+        node.service_mut().cleanupGen = self.cleanupGen;
         let ptr : *const NodeType = &*node;
         self.data.push(node);
         ptr
@@ -198,58 +245,107 @@ where NodeType : GraphNode<Node = N, Edge = E>
     //one after anchor branded with the same 'id is dropped and there is no safe way to dispose of the nodes
     //before it happens
     //Every reference bound to &self is protected from aliasing due to Rust borrowing rules
-    fn get<'id>(&self, item : GraphPtr<'id, NodeType>) -> &N {
+    fn get<'id>(&self, item : GraphPtr<'id, NodeType>) -> &N
+    {
         unsafe {
             (*item.as_ptr()).get()
         }
     }
 
-    fn get_mut<'id>(&mut self, item : GraphPtr<'id, NodeType>) -> &mut N {
+    fn get_mut<'id>(&mut self, item : GraphPtr<'id, NodeType>) -> &mut N
+    {
         unsafe {
             (*item.as_mut()).get_mut()
         }
     }
 
-    #[allow(dead_code)]
-    #[allow(unused_variables)]
-    unsafe fn kill(&mut self, item : *const NodeType) {
-        unimplemented!();
+    unsafe fn kill(&mut self, item : *const NodeType)
+    {
+        let storeIndex = {
+            (*item).service().storeIndex
+        };
+        
+        if self.data.len() > 0 && storeIndex < self.data.len() {
+            self.data.last_mut().unwrap().service_mut().storeIndex = storeIndex;
+            self.data.swap_remove(storeIndex);
+        } else { 
+            //storeIndex always points to the current position in the Vec
+            unreachable!()
+            //unreachable_unchecked()
+        }
+    }
+
+    fn iter_from_raw<'id : 'a, Iter : 'a>(&'a self, src : GraphPtr<'id, NodeType>, iter : Iter)
+        ->impl Iterator<Item = GraphIterRes<Edge<&'a N, &'a E>, GraphPtr<'id, NodeType>>>
+    where Iter : Iterator<Item = (*const NodeType, &'a E)>
+    {
+        let g = src._guard;
+        let current = src.node.as_ptr() as *const NodeType;
+        iter.map(move |x| {
+            let ptr = x.0;
+            let p =  unsafe { GraphPtr::from_ptr(ptr, g) };
+            let that = unsafe { (*ptr).get() };
+        
+            if current == ptr {
+                GraphIterRes { values : Loop(EdgeSingle { this : that, edge : x.1}), ptr : p }
+            } else {
+                let this = unsafe { (*current).get() };
+                GraphIterRes { values : Both(EdgeBoth { this, that, edge : x.1 }), ptr : p }
+            }
+        })
+    }
+
+    fn iter_mut_from_raw<'id : 'a, Iter : 'a>(&'a mut self, src : GraphPtr<'id, NodeType>, iter : Iter)
+        -> impl Iterator<Item = GraphIterRes<Edge<&'a mut N, &'a mut E>, GraphPtr<'id, NodeType>>>
+    where Iter : Iterator<Item = (*mut NodeType, &'a mut E)>
+    {
+        let g = src._guard;
+        let current = src.node.as_ptr() as *mut NodeType;
+        iter.map(move |x| {
+            let ptr = x.0;
+            let p =  unsafe { GraphPtr::from_mut(ptr, g) };
+            let that = unsafe { (*ptr).get_mut() };
+
+            if current == ptr {
+                GraphIterRes { values : Loop(EdgeSingle { this : that, edge : x.1}), ptr : p }
+            } else {
+                //aliasing was explicitly checked
+                let this = unsafe { (*current).get_mut() };
+                GraphIterRes { values : Both(EdgeBoth { this, that, edge : x.1 }), ptr : p }
+            }
+        })
     }
 }
 
-impl <N, E, NodeType> GraphRaw<NodeType>
-where NodeType : GraphNode<Node = N, Edge = E>
+impl <N, E> GraphRaw<NamedNode<N, E>>
 {
-    fn bridge<'id>(&mut self, src : GraphPtr<'id, NodeType>, dst : GraphPtr<'id, NodeType>) -> Edge<&'_ mut N, ()> {
-        let this = self.get_mut(src);
+    fn bridge<'id>(&mut self, src : GraphPtr<'id, node_views::NamedNode<'id, N, E>>,
+                              dst : GraphPtr<'id, node_views::NamedNode<'id, N, E>>)
+                    -> Option<(&'_ mut node_views::NamedNode<'id, N, E>, &'_ mut node_views::NamedNode<'id, N, E>)>
+    {
         if src == dst { 
-            Loop(EdgeSingle { this, edge : () })
+            None
         } else {
-            //aliasing was explicitly checked
-            let that = unsafe { (*dst.as_mut()).get_mut() };
-            Both(EdgeBoth { this, that, edge : () })
+            unsafe {
+                //node_view::_ is a prefix of _ and both are repr(C)
+                let src = transmute(&mut (*src.as_mut()));
+                let dst = transmute(&mut (*dst.as_mut()));
+                Some((src, dst))
+            }
         }
     }
 }
 
 impl <N, E> GraphRaw<NamedNode<N, E>> {
-    fn connect<'id>(&mut self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>, edge : E) {
-        let refs = unsafe { &mut (*src.as_mut()).refs };
-        refs.insert(dst.node, edge);
-    }
-
-    fn disconnect<'id>(&mut self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>) {
-        let refs = unsafe { &mut (*src.as_mut()).refs };
-        refs.remove(&dst.node);
-    }
-
-    fn get_edge<'id>(&self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ N, &'_ E>> {
+    fn get_edge<'id>(&self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ N, &'_ E>>
+    {
         let this = unsafe { &(*src.as_ptr()) };
 
         let this_refs = &this.refs;
-        let this = &this.payload;
-        
-        if let Some(e) = this_refs.get(&dst.node) {
+        let this = &this.data;
+
+        let s_dst = unsafe { dst.make_static() };
+        if let Some(e) = this_refs.get(&s_dst) {
             if src == dst {
                 Some(Loop(EdgeSingle { this, edge : &e }))
             } else {
@@ -261,14 +357,16 @@ impl <N, E> GraphRaw<NamedNode<N, E>> {
         }
     }
 
-    fn get_edge_mut<'id>(&mut self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ mut N, &'_ mut E>> {
+    fn get_edge_mut<'id>(&mut self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ mut N, &'_ mut E>>
+    {
         //aliasing check will be required in order to not violate (*) invariants
         let this = unsafe { &mut (*src.as_mut()) };
 
         let this_refs = &mut this.refs;
-        let this = &mut this.payload;
+        let this = &mut this.data;
         
-        if let Some(e) = this_refs.get_mut(&dst.node) {
+        let s_dst = unsafe { dst.make_static() };
+        if let Some(e) = this_refs.get_mut(&s_dst) {
             if src == dst {
                 Some(Loop(EdgeSingle { this, edge : e }))
             } else {
@@ -279,11 +377,26 @@ impl <N, E> GraphRaw<NamedNode<N, E>> {
             None
         }
     }
+
+    fn get_view<'id>(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &node_views::NamedNode<'id, N, E>
+    {
+        unsafe {
+            transmute(&*dst.as_ptr())
+        }
+    }
+
+    fn get_view_mut<'id>(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &mut node_views::NamedNode<'id, N, E>
+    {
+        unsafe {
+            transmute(&mut *dst.as_mut())
+        }
+    }
 }
 
 impl <T> GraphRaw<T> {
-    fn new() -> GraphRaw<T> {
-        GraphRaw { data : Vec::new() }
+    fn new() -> GraphRaw<T>
+    {
+        GraphRaw { data : Vec::new(), cleanupGen : CleanupGen::Even }
     }
 }
 
@@ -292,19 +405,33 @@ pub struct GenericGraph<Root, NodeType> {
     root : Root
 }
 
-pub type VecGraph<T> = GenericGraph<Vec<NonNull<T>>, T>;
-
 impl <Root : Default, NodeType> Default for GenericGraph<Root, NodeType> {
-    fn default() -> Self {
+    fn default() -> Self
+    {
         GenericGraph::new()
     }
 }
 
 impl <Root : Default, NodeType> GenericGraph<Root, NodeType> {
-    pub fn new() -> Self {
+    pub fn new() -> Self
+    {
         GenericGraph { root : Root::default(), internal : GraphRaw::new() }
     }
 }
+
+impl <Root, NodeType> GenericGraph<Root, NodeType> {
+    /// Creates an AnchorMut from a generativity brand using selected cleanup strategy.
+    /// Prefer make_anchor_mut macro in application code.
+    /// # Safety
+    /// Caller must use a unique `guard` from generativity::Guard.
+    pub unsafe fn anchor_mut<'id>(&mut self, guard : Id<'id>, strategy : CleanupStrategy)
+                                  -> AnchorMut<'_, 'id, GenericGraph<Root, NodeType>>
+    {
+        AnchorMut { parent : self, _guard : guard, strategy }
+    }
+}
+
+pub type VecGraph<T> = GenericGraph<Vec<GraphPtr<'static, T>>, T>;
 
 /// A strategy AnchorMut employs to perform cleanup after drop.
 pub enum CleanupStrategy {
@@ -318,44 +445,35 @@ pub struct AnchorMut<'this, 'id : 'this, T : 'this> {
     _guard : Id<'id>,
 }
 
-
-impl <'this, 'id: 'this, T : 'this> Drop for AnchorMut<'this, 'id, T> {
+impl <'this, 'id: 'this, T : 'this> Drop for AnchorMut<'this, 'id, T>
+{
     fn drop(&mut self) {}
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this, Root : 'this>
-Index<GraphPtr<'id, NodeType>> for AnchorMut<'this, 'id, GenericGraph<Root, NodeType>>
-where NodeType : GraphNode<Node = N, Edge = E>
+impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
+Index<GraphPtr<'id, NamedNode<N, E>>>
+for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 {
-    type Output = N;
-    fn index(&self, dst : GraphPtr<'id, NodeType>) -> &Self::Output {
-        &self.internal().get(dst)
+    type Output = node_views::NamedNode<'id, N, E>;
+    fn index(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &Self::Output
+    {
+        self.internal().get_view(dst)
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this, Root : 'this>
-IndexMut<GraphPtr<'id, NodeType>> for AnchorMut<'this, 'id, GenericGraph<Root, NodeType>>
-where NodeType : GraphNode<Node = N, Edge = E>
+impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
+IndexMut<GraphPtr<'id, NamedNode<N, E>>>
+for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 {
-    fn index_mut(&mut self, dst : GraphPtr<'id, NodeType>) -> &mut Self::Output {
-        self.internal_mut().get_mut(dst)
-    }
-}
-
-impl <Root, NodeType> GenericGraph<Root, NodeType> {
-    /// Creates an AnchorMut from a generativity brand using selected cleanup strategy.
-    /// Prefer make_anchor_mut macro in application code.
-    /// # Safety
-    /// Caller must use a unique `guard` from generativity::Guard.
-    pub unsafe fn anchor_mut<'id>(&mut self, guard : Id<'id>, strategy : CleanupStrategy)
-                                  -> AnchorMut<'_, 'id, GenericGraph<Root,NodeType>> {
-        AnchorMut { parent : self, _guard : guard, strategy }
+    fn index_mut(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &mut Self::Output {
+        self.internal_mut().get_view_mut(dst)
     }
 }
 
 #[macro_export]
 /// Creates an AnchorMut using selected cleanup strategy.
-macro_rules! make_anchor_mut {
+macro_rules! make_anchor_mut
+{
     ($name:ident, $parent:ident, $strategy:ident) => {
         make_guard!(g);
         let mut $name = unsafe { $parent.anchor_mut(Id::from(g), $crate::CleanupStrategy::$strategy) };
@@ -372,12 +490,26 @@ where NodeType : GraphNode<Node = N, Edge = E>
     /// Creates a checked pointer from a raw pointer
     ///# Safety
     /// Caller must guarantee `raw` points to a node which was not cleaned up and belongs to the parent graph 
-    pub unsafe fn gptr_from_ptr(&self, raw : *const NodeType) -> GraphPtr<'id, NodeType> {
+    pub unsafe fn from_raw(&self, raw : *const NodeType) -> GraphPtr<'id, NodeType>
+    {
         GraphPtr::from_ptr(raw, self._guard)
     }
     /// Creates an immutable cursor pointing to `dst`
-    pub fn cursor(&self, dst : GraphPtr<'id, NodeType>) -> Cursor<'_, 'id, NodeType> {
+    pub fn cursor(&self, dst : GraphPtr<'id, NodeType>) -> Cursor<'_, 'id, NodeType>
+    {
         Cursor { parent : self.internal(), current : dst }
+    }
+
+    fn root_iter_from_raw<'a, Iter : 'a>(&'a self, iter : Iter)
+        -> impl Iterator<Item = (&'a N, GraphPtr<'id, NodeType>)>
+        where Iter : Iterator<Item = *const NodeType>
+    {
+        let g = self._guard;
+        iter.map(move |x| {
+            let p =  unsafe { GraphPtr::from_ptr(x, g) };
+            let data = unsafe { (*x).get() };
+            (data, p)
+        })
     }
 }
 
@@ -385,121 +517,86 @@ impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this, Root : 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NodeType>>
 where NodeType : GraphNode<Node = N, Edge = E>
 {
-    fn internal_mut(&mut self) -> &mut GraphRaw<NodeType> {
+    fn internal_mut(&mut self) -> &mut GraphRaw<NodeType>
+    {
         &mut self.parent.internal
     }
 
     /// Allocates a new node and returns the pointer. This node will become inaccessible when parent anchor
     /// is dropped and will be disposed of upon next cleanup unless you attach it to root or another node accessible
     /// from the root.
-    pub fn spawn_detached(&mut self, payload : N) -> GraphPtr<'id, NodeType> {
-        let ptr = self.internal_mut().spawn_detached(payload);
+    pub fn spawn(&mut self, data : N) -> GraphPtr<'id, NodeType>
+    {
+        let ptr = self.internal_mut().spawn_detached(data);
         unsafe {
             GraphPtr::from_ptr(ptr, self._guard )
         }
     }
 
     /// Creates a mutable cursor pointing to `dst`.
-    pub fn cursor_mut(&mut self, dst : GraphPtr<'id, NodeType>) ->
-                      CursorMut<'_, 'id, NodeType> {
+    pub fn cursor_mut(&mut self, dst : GraphPtr<'id, NodeType>)
+           -> CursorMut<'_, 'id, NodeType>
+    {
         CursorMut { parent : self.internal_mut(), current : dst }
     }
+
+
+    fn root_iter_mut_from_raw<'a, Iter : 'a>(&'a mut self, iter : Iter)
+        -> impl Iterator<Item = (&'a mut N, GraphPtr<'id, NodeType>)>
+        where Iter : Iterator<Item = *mut NodeType>
+    {
+        let g = self._guard;
+        iter.map(move |x| {
+            let p =  unsafe { GraphPtr::from_mut(x, g) };
+            let data = unsafe { (*x).get_mut() };
+            (data, p)
+        })
+    }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
-AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
-{
-    /// Creates an edge from `src` to `dst` with the value `edge`.
-    pub fn connect(&mut self, src : GraphPtr<'id, NamedNode<N, E>>,
-                   dst : GraphPtr<'id, NamedNode<N, E>>, edge : E)
-    {
-        self.internal_mut().connect(src, dst, edge);
-    }
-
-    /// Removes an edge from `src` to `dst`.
-    pub fn disconnect(&mut self, src : GraphPtr<'id, NamedNode<N, E>>,
-                      dst : GraphPtr<'id, NamedNode<N, E>>)
-    {
-        self.internal_mut().disconnect(src, dst);
-    }
-
-    /// Provides direct access to the contents of the `dst` node.
-    /// !!! Relies on undefined behavior and should not be used !!!
-    pub fn view(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &node_views::NamedNode<'id, N, E> {
-        // not sound, but should be
-        let this = unsafe { &(*dst.as_ptr()) };
-        unsafe { transmute(this) }
-    }
-
-    /// Provides mutable direct access to the contents of the `dst` node.
-    /// !!! Relies on undefined behavior and should not be used !!!
-    pub fn view_mut(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &mut node_views::NamedNode<'id, N, E> {
-        // not sound, but should be
-        let this = unsafe { &mut (*dst.as_mut()) };
-        unsafe { transmute(this) }
-    }
-}
 
 impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this>
 AnchorMut<'this, 'id, VecGraph<NodeType>>
 where NodeType : GraphNode<Node = N, Edge = E>
 {
     /// Allocates a new node and returns the pointer. Attaches the node to the root.
-    pub fn spawn(&mut self, payload : N) -> GraphPtr<'id, NodeType> {
-        let res = self.spawn_detached(payload);
-        self.attach(res);
+    pub fn spawn_attached(&mut self, data : N) -> GraphPtr<'id, NodeType>
+    {
+        let res = self.internal_mut().spawn_detached(data);
+        let res = unsafe { self.from_raw(res)};
+        let a = unsafe { (res.make_static()) };
+        self.parent.root.push(a);
         res
     }
 
     /// Provides safe direct access to the collection of the root.
-    /// !!! Relies on undefined behavior and should not be used !!!
-    pub fn root(&self) -> &Vec<GraphPtr<'id, NodeType>> {
-        // not sound, but should be
+    pub fn root(&self) -> &Vec<GraphPtr<'id, NodeType>>
+    {
         unsafe {
             transmute(&self.parent.root)
         }
     }
 
     /// Provides safe mutable direct access to the collection of the root.
-    /// !!! Relies on undefined behavior and should not be used !!!
-    pub fn root_mut(&mut self) -> &mut Vec<GraphPtr<'id, NodeType>> {
-        // not sound, but should be
+    pub fn root_mut(&mut self) -> &mut Vec<GraphPtr<'id, NodeType>>
+    {
         unsafe {
             transmute(&mut self.parent.root)
         }
     }
 
-    /// Attaches `dst` to the root using Vec::push.
-    pub fn attach(&mut self, dst : GraphPtr<'id, NodeType>) {
-        self.parent.root.push(dst.node);
+    /// Returns an iterator over datas and node pointers attached to the root.
+    pub fn iter(&self) -> impl Iterator<Item = (&'_ N, GraphPtr<'id, NodeType>)>
+    {
+        self.root_iter_from_raw(self.parent.root.iter().map(|x| { x.as_ptr() }))
     }
 
-    /// Detaches a node from the root using Vec::swap_remove.
-    pub fn detach(&mut self, index : usize) {
-        self.parent.root.swap_remove(index);
-    }
-
-    /// Returns an iterator over payloads and node pointers attached to the root.
-    pub fn iter(&self) -> impl Iterator<Item = (&'_ N, GraphPtr<'id, NodeType>)> {
-        let g = self._guard;
-        self.parent.root.iter().map(move |x| {
-            let x = x.as_ptr() as *const NodeType;
-            let p =  unsafe { GraphPtr::from_ptr(x, g) };
-            let payload = unsafe { (*x).get() };
-            (payload, p)
-        })
-    }
-
-    /// Returns a mutable iterator over payloads and node pointers attached to the root.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&'_ mut N, GraphPtr<'id, NodeType>)> {
-        let g = self._guard;
-        self.parent.root.iter_mut().map(move |x| {
-            let x = x.as_ptr();
-            let p =  unsafe { GraphPtr::from_mut(x, g) };
-            //this won't alias since each next() will invalidate the previous one.
-            let payload = unsafe { (*x).get_mut() };
-            (payload, p)
-        })
+    /// Returns a mutable iterator over datas and node pointers attached to the root.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&'_ mut N, GraphPtr<'id, NodeType>)>
+    {
+        //unbind reference. root_iter_mut_from_raw only uses _guard and not root
+        let r : &mut Vec<GraphPtr<NodeType>> = unsafe { transmute(&mut self.parent.root) };
+        self.root_iter_mut_from_raw(r.iter_mut().map(|x| { x.as_mut() }))
     }
 }
 
@@ -508,7 +605,6 @@ pub struct CursorMut<'this, 'id : 'this, T : 'this> {
     current : GraphPtr<'id, T>
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Cursor<'this, 'id : 'this, T : 'this> {
     parent : &'this GraphRaw<T>,
     current : GraphPtr<'id, T>
@@ -521,22 +617,20 @@ macro_rules! impl_cursor_immutable {
         where NodeType : GraphNode<Node = N, Edge = E>
         {
             /// Returns a pointer to the current node the cursor points to.
-            pub fn at(&self) -> GraphPtr<'id, NodeType> {
+            pub fn at(&self) -> GraphPtr<'id, NodeType>
+            {
                 self.current
             }
         
             /// Returns true if the cursor points to `dst`.
-            pub fn is_at(&self, dst : GraphPtr<'id, NodeType>) -> bool {
+            pub fn is_at(&self, dst : GraphPtr<'id, NodeType>) -> bool
+            {
                 dst == self.at()
             }
         
-            /// Returns a reference to payload of the current node.
-            pub fn get(&self) -> &N {
-                self.parent.get(self.at())
-            }
-        
             /// Makes the cursor point to the `dst`.
-            pub fn jump(&mut self, dst : GraphPtr<'id, NodeType>) {
+            pub fn jump(&mut self, dst : GraphPtr<'id, NodeType>)
+            {
                 self.current = dst;
             }
         }
@@ -545,38 +639,29 @@ macro_rules! impl_cursor_immutable {
         $cursor_type<'this, 'id, NamedNode<N, E>>
         {
             /// Returns an iterator over edges and node pointers attached to the current node.
-            pub fn iter(&self) -> impl Iterator<Item = GraphIterRes<Edge<&'_ N, &'_ E>, GraphPtr<'id, NamedNode<N, E>>>> {
-                let current = self.at().as_ptr();
-                let g = self.at()._guard;
-        
-                let node_refs = unsafe { &(*current).refs };
-                node_refs.iter().map(move |x| {
-                    let ptr = (x.0).as_ptr() as *const NamedNode<N, E>;
-                    let p =  unsafe { GraphPtr::from_ptr(ptr, g) };
-                    let that = unsafe { (*ptr).get() };
-
-                    if (current == ptr) {
-                        GraphIterRes { values : Loop(EdgeSingle { this : that, edge : x.1}), ptr : p }
-                    } else {
-                        let this = unsafe { (*current).get() };
-                        GraphIterRes { values : Both(EdgeBoth { this : this, that : that, edge : x.1 }), ptr : p }
-                    }
-                })
+            pub fn iter(&self) -> impl Iterator<Item = GraphIterRes<Edge<&'_ N, &'_ E>, GraphPtr<'id, NamedNode<N, E>>>>
+            {
+                let current = self.current;
+                let node_refs = unsafe { &(*current.as_ptr()).refs };
+                self.parent.iter_from_raw(self.current, node_refs.iter().map(|x|{
+                    let p = x.0.as_ptr();
+                    (p, x.1)
+                }))
             }
         
             /// Returns Some if `dst` is attached to the current node and None otherwise.
-            pub fn get_edge(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ N, &'_ E>> {
+            pub fn get_edge(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ N, &'_ E>>
+            {
                 self.parent.get_edge(self.at(), dst)
             }
         }
         
-        ///Relies on undefined behavior and should not be used
-        impl <'this, 'id : 'this, N : 'this, E : 'this> Deref for $cursor_type<'this, 'id, NamedNode<N, E>> {
+        impl <'this, 'id : 'this, N : 'this, E : 'this> Deref for $cursor_type<'this, 'id, NamedNode<N, E>>
+        {
             type Target = node_views::NamedNode<'id, N, E>;
-            fn deref(&self) -> &Self::Target {
-                // not sound, but should be
-                let this = unsafe { &(*self.at().as_ptr()) };
-                unsafe { transmute(this) }
+            fn deref(&self) -> &Self::Target
+            {
+                self.parent.get_view(self.at())
             }
         }
     }
@@ -585,68 +670,31 @@ macro_rules! impl_cursor_immutable {
 impl_cursor_immutable!{CursorMut}
 impl_cursor_immutable!{Cursor}
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this>
-CursorMut<'this, 'id, NodeType>
-where NodeType : GraphNode<Node = N, Edge = E>
-{
-    /// Returns mutable references to payloads of the current node and `dst` as if two are connected via an
-    /// empty edge.
-    pub fn bridge(&mut self, dst : GraphPtr<'id, NodeType>) -> Edge<&'_ mut N, ()> {
-        self.parent.bridge(self.at(), dst)
-    }
-
-    /// Returns a mutable reference to payload of the current node.
-    pub fn get_mut(&mut self) -> &mut N {
-        self.parent.get_mut(self.at())
-    }
-}
-
 impl <'this, 'id : 'this, N : 'this, E : 'this>
 CursorMut<'this, 'id, NamedNode<N, E>>
 {
     /// Returns a mutable iterator over edges and node pointers attached to the current node.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = GraphIterRes<Edge<&'_ mut N, &'_ mut E>, GraphPtr<'id, NamedNode<N, E>>>> {
-        let current = self.at().as_mut();
-        let g = self.at()._guard;
-
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = GraphIterRes<Edge<&'_ mut N, &'_ mut E>, GraphPtr<'id, NamedNode<N, E>>>>
+    {
+        let current = self.current;
         //*current is dropped before closure is ever invoked and does not alias
-        let node_refs = unsafe { &mut (*current).refs };
-        node_refs.iter_mut().map(move |x| {
-            let ptr = (x.0).as_ptr();
-            let p =  unsafe { GraphPtr::from_mut(ptr, g) };
-            let that = unsafe { (*ptr).get_mut() };
-
-            if current == ptr {
-                GraphIterRes { values : Loop(EdgeSingle { this : that, edge : x.1}), ptr : p }
-            } else {
-                //aliasing was explicitly checked
-                let this = unsafe { (*current).get_mut() };
-                GraphIterRes { values : Both(EdgeBoth { this , that, edge : x.1 }), ptr : p }
-            }
-        })
-    }
-
-    /// Creates an edge from the current node to `dst` with the value edge.
-    pub fn attach(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>, edge : E) {
-        self.parent.connect(self.at(), dst, edge);
-    }
-
-    /// Removes an edge from the node to `dst`.
-    pub fn detach(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) {
-        self.parent.disconnect(self.at(), dst);
+        let node_refs = unsafe { &mut (*current.as_mut()).refs };
+        self.parent.iter_mut_from_raw(current, node_refs.iter_mut().map(|x| {
+            let p = x.0.as_mut();
+            (p, x.1)
+        }))
     }
 
     /// Returns Some if `dst` is attached to the current node and None otherwise.
-    fn get_edge_mut(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ mut N, &'_ mut E>> {
+    fn get_edge_mut(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ mut N, &'_ mut E>>
+    {
         self.parent.get_edge_mut(self.at(), dst)
     }
 }
 
-///Relies on undefined behavior and should not be used
-impl <'this, 'id : 'this, N : 'this, E : 'this> DerefMut for CursorMut<'this, 'id, NamedNode<N, E>> {
+impl <'this, 'id : 'this, N : 'this, E : 'this> DerefMut for CursorMut<'this, 'id, NamedNode<N, E>>
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let this = unsafe { &mut (*self.at().as_mut()) };
-        //unsound
-        unsafe { transmute(this) }
+        self.parent.get_view_mut(self.at())
     }
 }
