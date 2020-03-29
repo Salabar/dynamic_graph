@@ -2,23 +2,18 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 
 use dynamic_graph::*;
-
+use dynamic_graph::edge::*;
 #[derive(PartialEq, Eq)]
 struct BfsNode {
     key : i32,
     distance : i32
 }
 
+fn breadth_first_search(graph : &mut VecGraph<NamedNode<BfsNode, ()>>) {
+    anchor_mut!(graph, Never);
 
-fn breadth_first_search(gr : &mut VecGraph<NamedNode<BfsNode, ()>>) {
-    make_anchor_mut!(anchor, gr, Never);
-
-    let root =  {
-        let mut iter = anchor.iter();
-        iter.next().unwrap().1
-    };
-    
-    let mut cursor = anchor.cursor_mut(root);
+    let root =  graph.root()[0];
+    let mut cursor = graph.cursor_mut(root);
 
     cursor.data.distance = 0;
     let mut queue = VecDeque::new();
@@ -47,43 +42,43 @@ fn breadth_first_search(gr : &mut VecGraph<NamedNode<BfsNode, ()>>) {
 fn test_bfs_view() {
     let mut graph = VecGraph::<NamedNode<BfsNode, ()>>::new();
     {
-        make_anchor_mut!(anchor, graph, Never);
+        anchor_mut!(graph, Never);
         
         let mut vec = Vec::new();
         //Thomas Cormen, Introduction to Algorithms 2e, pic. 22.3
         for i in 0..8 {
-            vec.push(anchor.spawn(BfsNode { key : i, distance : -1}));
+            vec.push(graph.spawn(BfsNode { key : i, distance : -1}));
         }
-        anchor.root_mut().push(vec[0]);
+        graph.root_mut().push(vec[0]);
 
         for i in &[vec[1], vec[3]] {
-            anchor[vec[0]].refs.insert(*i, ());
+            graph[vec[0]].refs.insert(*i, ());
         }        
 
         for i in &[vec[0], vec[2]] {
-            anchor[vec[1]].refs.insert(*i, ());
+            graph[vec[1]].refs.insert(*i, ());
         }
 
-        anchor[vec[2]].refs.insert(vec[1], ());
+        graph[vec[2]].refs.insert(vec[1], ());
 
         for i in &[vec[0], vec[4], vec[5]] {
-            anchor[vec[3]].refs.insert(*i, ());
+            graph[vec[3]].refs.insert(*i, ());
         }
 
         for i in &[vec[3], vec[5], vec[6]] {
-            anchor[vec[4]].refs.insert(*i, ());
+            graph[vec[4]].refs.insert(*i, ());
         }
 
         for i in &[vec[3], vec[4], vec[6], vec[7]] {
-            anchor[vec[5]].refs.insert(*i, ());
+            graph[vec[5]].refs.insert(*i, ());
         }
 
         for i in &[vec[4], vec[5], vec[7]] {
-            anchor[vec[6]].refs.insert(*i, ());
+            graph[vec[6]].refs.insert(*i, ());
         }
 
         for i in &[vec[5], vec[6]] {
-            anchor[vec[7]].refs.insert(*i, ());
+            graph[vec[7]].refs.insert(*i, ());
         }
     }
     breadth_first_search(&mut graph);
@@ -138,7 +133,7 @@ fn print_bf_path<'id, 'a>(graph : &AnchorMut<'a, 'id, VecGraph<NamedNode<usize, 
 
             cursor.jump(prev);
 
-            let len = cursor.get_edge(cur).unwrap().this().edge;
+            let len = cursor.get_edge(cur).edge().unwrap();
             full_len += len;
             println!("{} to {}, len {}", prev_key, cur_key, len);
         }
@@ -149,39 +144,66 @@ fn print_bf_path<'id, 'a>(graph : &AnchorMut<'a, 'id, VecGraph<NamedNode<usize, 
 #[test]
 fn shortest_path_test() {
     let mut graph = VecGraph::new();
-    make_anchor_mut!(anchor, graph, Never);
+    anchor_mut!(graph, Never);
     //Thomas Cormen, Introduction to Algorithms 2e, pic. 24.6
 
-    let source = anchor.spawn_attached(0);
+    let source = graph.spawn_attached(0);
 
-    let n1 = anchor.spawn(1);
-    let n2 = anchor.spawn(2);
+    let n1 = graph.spawn(1);
+    let n2 = graph.spawn(2);
 
-    let n3 = anchor.spawn(3);
-    let n4 = anchor.spawn(4);
+    let n3 = graph.spawn(3);
+    let n4 = graph.spawn(4);
 
-    anchor[source].refs.insert(n1, 10);
-    anchor[source].refs.insert(n2, 5);
+    let refs = &mut graph[source].refs;
+    refs.insert(n1, 10);
+    refs.insert(n2, 5);
 
-    let refs = &mut anchor[n1].refs;
+    let refs = &mut graph[n1].refs;
     refs.insert(n2, 2);
     refs.insert(n3, 1);
     
-    let refs = &mut anchor[n2].refs;
+    let refs = &mut graph[n2].refs;
 
     refs.insert(n1, 3);
     refs.insert(n4, 2);
     refs.insert(n3, 9);
 
-    let refs = &mut anchor[n4].refs;
+    let refs = &mut graph[n4].refs;
     refs.insert(n3, 6);
     refs.insert(source, 7);
 
-    anchor[n3].refs.insert(n4, 4);
+    graph[n3].refs.insert(n4, 4);
 
-    let path = bellman_ford(&anchor, 5, source);
-    assert!(print_bf_path(&anchor, &path, source, n1) == 8);
-    assert!(print_bf_path(&anchor, &path, source, n2) == 5);
-    assert!(print_bf_path(&anchor, &path, source, n3) == 9);
-    assert!(print_bf_path(&anchor, &path, source, n4) == 7);
+    let path = bellman_ford(&graph, 5, source);
+    assert!(print_bf_path(&graph, &path, source, n1) == 8);
+    assert!(print_bf_path(&graph, &path, source, n2) == 5);
+    assert!(print_bf_path(&graph, &path, source, n3) == 9);
+    assert!(print_bf_path(&graph, &path, source, n4) == 7);
 }
+
+#[test]
+fn ptr_from_view_test() {
+    let mut graph = VecGraph::<NamedNode<_, i32>>::new();
+    anchor_mut!(graph, Never);
+
+    let source = graph.spawn(0);
+    let source2 = GraphPtr::from(&graph[source]);
+    assert!(source == source2);
+
+    let source3 = GraphPtr::from(&mut graph[source2]);
+    assert!(source3 == source2);
+}
+
+#[test]
+fn kill_smoke_test() {
+    let mut graph = VecGraph::<NamedNode<_, i32>>::new();
+    anchor_mut!(graph, Never);
+
+    let source = graph.spawn(0);
+    unsafe {
+        graph.kill(source);
+    }
+}
+
+
