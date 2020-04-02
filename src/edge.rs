@@ -14,7 +14,7 @@ pub struct EdgeBoth<N, E> {
     pub edge : E
 }
 
-pub struct EdgeSingle<N, E> {
+pub struct EdgeLoop<N, E> {
     ///Value from the node.
     pub this : N,
     ///Value from the edge.
@@ -24,7 +24,7 @@ pub struct EdgeSingle<N, E> {
 ///View into nodes data connected by an edge. Both if the edge connects two different nodes and Loop if the edge loops back to the source node.
 pub enum Edge<N, E> {
     Both(EdgeBoth<N, E>),
-    Loop(EdgeSingle<N, E>),
+    Loop(EdgeLoop<N, E>),
 }
 
 pub use crate::Edge::Both;
@@ -32,22 +32,25 @@ pub use crate::Edge::Loop;
 
 /// An add-on to Option interface to make interactions of Edge with std feel more natural.
 pub trait OptionEdge<N, E> {
-    fn this(self) -> Option<EdgeSingle<N, E>>;
-    fn that(self) -> Option<EdgeSingle<N, E>>;
+    fn this(self) -> Option<EdgeLoop<N, E>>;
+    fn that(self) -> Option<EdgeLoop<N, E>>;
     fn both(self) -> Option<EdgeBoth<N, E>>;
     fn edge(self) -> Option<E>;
     unsafe fn both_unchecked(self) -> Option<EdgeBoth<N, E>>;
+
+    fn apply_both<F : FnMut(&mut EdgeBoth<N, E>)>(self, f : F) -> Option<Edge<N, E>>;
+    fn apply_loop<F : FnMut(&mut EdgeLoop<N, E>)>(self, f : F) -> Option<Edge<N, E>>;
 }
 
 impl <N, E> OptionEdge<N, E> for Option<Edge<N, E>>
 {
-    fn this(self) -> Option<EdgeSingle<N, E>> {
+    fn this(self) -> Option<EdgeLoop<N, E>> {
         self.map(|x| {
             x.this()
         })
     }
 
-    fn that(self) -> Option<EdgeSingle<N, E>> {
+    fn that(self) -> Option<EdgeLoop<N, E>> {
         self.map(|x| {
             x.that()
         })
@@ -61,10 +64,9 @@ impl <N, E> OptionEdge<N, E> for Option<Edge<N, E>>
     }
 
     unsafe fn both_unchecked(self) -> Option<EdgeBoth<N, E>> {
-        match self {
-            Some(s) => Some(s.both_unchecked()),
-            _ => unreachable_unchecked(),
-        }
+        self.map(|x| {
+            x.both_unchecked()
+        })
     }
 
     fn edge(self) -> Option<E> {
@@ -72,23 +74,35 @@ impl <N, E> OptionEdge<N, E> for Option<Edge<N, E>>
             x.edge()
         })
     }
+
+    fn apply_both<F : FnMut(&mut EdgeBoth<N, E>)>(self, f : F) -> Option<Edge<N, E>> {
+        self.map(|x| {
+            x.apply_both(f)
+        })
+    }
+
+    fn apply_loop<F : FnMut(&mut EdgeLoop<N, E>)>(self, f : F) -> Option<Edge<N, E>> {
+        self.map(|x| {
+            x.apply_loop(f)
+        })
+    }
 }
 
 impl <N, E> Edge<N, E> {
     ///Returns data from the source node and the edge.
-    pub fn this(self) -> EdgeSingle<N, E>
+    pub fn this(self) -> EdgeLoop<N, E>
     {
         match self {
-            Both(s) => EdgeSingle { this : s.this, edge : s.edge },
+            Both(s) => EdgeLoop { this : s.this, edge : s.edge },
             Loop(s) => s,
         }
     }
 
     ///Returns data from the destination node and the edge.
-    pub fn that(self) -> EdgeSingle<N, E>
+    pub fn that(self) -> EdgeLoop<N, E>
     {
         match self {
-            Both(s) => EdgeSingle { this : s.that, edge : s.edge },
+            Both(s) => EdgeLoop { this : s.that, edge : s.edge },
             Loop(s) => s,
         }
     }
@@ -113,9 +127,33 @@ impl <N, E> Edge<N, E> {
         }
     }
 
-    // Returns the edge.
+    // Returns the edge data.
     pub fn edge(self) -> E
     {
         self.this().edge
+    }
+
+    /// Applies a function if `self` is a Both value.
+    pub fn apply_both<F : FnMut(&mut EdgeBoth<N, E>)>(self, mut f : F) -> Edge<N, E>
+    {
+        match self {
+            Both(mut s) => {
+                f(&mut s);
+                Both(s)
+            }
+            Loop(s) => Loop(s),
+        }
+    }
+
+    /// Applies a function if `self` is a Loop value.
+    pub fn apply_loop<F : FnMut(&mut EdgeLoop<N, E>)>(self, mut f : F) -> Edge<N, E>
+    {
+        match self {
+            Both(s) => Both(s),
+            Loop(mut s) => {
+                f(&mut s);
+                Loop(s)
+            }
+        }
     }
 }

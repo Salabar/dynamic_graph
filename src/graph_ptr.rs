@@ -43,9 +43,11 @@ impl <'id, T> GraphPtr<'id, T> {
         GraphPtr { node : NonNull::new_unchecked(ptr as *mut T), _guard : guard }
     }
 
-    pub(crate) unsafe fn into_static(self) -> GraphPtr<'static, T>
+    pub(crate) fn into_static(self) -> GraphPtr<'static, T>
     {
-        transmute(self)
+        unsafe{
+            transmute(self)
+        }
     }
 }
 

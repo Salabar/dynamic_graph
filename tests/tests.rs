@@ -3,6 +3,10 @@ use std::collections::VecDeque;
 
 use dynamic_graph::*;
 use dynamic_graph::edge::*;
+
+use dynamic_graph::CleanupStrategy::*;
+use dynamic_graph::CleanupStrategy;
+
 #[derive(PartialEq, Eq)]
 struct BfsNode {
     key : i32,
@@ -10,7 +14,7 @@ struct BfsNode {
 }
 
 fn breadth_first_search(graph : &mut VecGraph<NamedNode<BfsNode, ()>>) {
-    anchor_mut!(graph, Never);
+    anchor_mut!(graph, AlwaysPrecise);
 
     let root =  graph.root()[0];
     let mut cursor = graph.cursor_mut(root);
@@ -40,7 +44,7 @@ fn breadth_first_search(graph : &mut VecGraph<NamedNode<BfsNode, ()>>) {
 
 #[test]
 fn test_bfs_view() {
-    let mut graph = VecGraph::<NamedNode<BfsNode, ()>>::new();
+    let mut graph = VecGraph::new();
     {
         anchor_mut!(graph, Never);
         
@@ -84,17 +88,18 @@ fn test_bfs_view() {
     breadth_first_search(&mut graph);
 }
 
-type BFRef<'id> = GraphPtr<'id, NamedNode<usize, usize>>;
+type BFNode = NamedNode<usize, usize>;
+type BFRef<'id> = GraphPtr<'id, BFNode>;
 
-fn bellman_ford<'this, 'id>(graph : &AnchorMut<'this, 'id, VecGraph<NamedNode<usize, usize>>>, count : usize,
-                         source : BFRef<'id>) -> HashMap::<BFRef<'id>, BFRef<'id>>
+fn bellman_ford<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>, count : usize,
+                         source : BFRef<'a>) -> HashMap::<BFRef<'a>, BFRef<'a>>
 {
-    let mut distance = HashMap::new();
+    let mut distance = HashMap::new();//from source node
     let mut path = HashMap::new();//(to;from)
 
     let mut cursor = graph.cursor(source);
     for i in cursor.iter() {
-        distance.insert(i.ptr, *i.values.this().edge);
+        distance.insert(i.ptr, *i.values.edge());
         path.insert(i.ptr, source);
     }
     distance.insert(source, 0);
@@ -104,7 +109,7 @@ fn bellman_ford<'this, 'id>(graph : &AnchorMut<'this, 'id, VecGraph<NamedNode<us
         for i in nodes {
             cursor.jump(i);
             for j in cursor.iter() {
-                let edge = j.values.this().edge;
+                let edge = j.values.edge();
                 let j = j.ptr;
                 if !distance.contains_key(&j) ||
                     distance[&j] > distance[&i] + edge {
@@ -118,9 +123,9 @@ fn bellman_ford<'this, 'id>(graph : &AnchorMut<'this, 'id, VecGraph<NamedNode<us
 }
 
 
-fn print_bf_path<'id, 'a>(graph : &AnchorMut<'a, 'id, VecGraph<NamedNode<usize, usize>>>,
-                path : &HashMap::<BFRef<'id>, BFRef<'id>>,
-                source : BFRef<'id>, target : BFRef<'id>) -> usize {
+fn print_bf_path<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>,
+                path : &HashMap::<BFRef<'a>, BFRef<'a>>,
+                source : BFRef<'a>, target : BFRef<'a>) -> usize {
     let mut cursor = graph.cursor(target);
     let mut full_len = 0;
     if path.contains_key(&target) {
@@ -183,22 +188,9 @@ fn shortest_path_test() {
 }
 
 #[test]
-fn ptr_from_view_test() {
-    let mut graph = VecGraph::<NamedNode<_, i32>>::new();
-    anchor_mut!(graph, Never);
-
-    let source = graph.spawn(0);
-    let source2 = GraphPtr::from(&graph[source]);
-    assert!(source == source2);
-
-    let source3 = GraphPtr::from(&mut graph[source2]);
-    assert!(source3 == source2);
-}
-
-#[test]
 fn kill_smoke_test() {
     let mut graph = VecGraph::<NamedNode<_, i32>>::new();
-    anchor_mut!(graph, Never);
+    anchor_mut!(graph, AlwaysPrecise);
 
     let source = graph.spawn(0);
     unsafe {

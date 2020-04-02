@@ -5,37 +5,45 @@ pub mod graph_raw;
 pub use crate::graph_raw::*;
 
 pub mod edge;
-pub use crate::edge::{GraphIterRes, Edge, Both, Loop, EdgeBoth, EdgeSingle};
+pub use crate::edge::{GraphIterRes, Edge, Both, Loop, EdgeBoth, EdgeLoop};
 
 pub mod nodes;
 pub use crate::nodes::*;
 
-use std::collections::HashMap;
 use core::hash::{Hash, Hasher};
 use core::mem::transmute;
 use core::ops::{Index, IndexMut, Deref, DerefMut};
 use core::ptr::NonNull;
 
-pub struct GenericGraph<Root, NodeType> {
+pub struct GenericGraph<Root, NodeType>
+where
+Root : RootCollection,
+NodeType : GraphNode,
+{
     internal : GraphRaw<NodeType>,
     root : Root
 }
 
-impl <Root : Default, NodeType> Default for GenericGraph<Root, NodeType> {
+pub trait GraphImpl {
+    fn cleanup_precise(&mut self);
+    fn cleanup(&mut self);
+}
+
+impl <Root : Default + RootCollection, NodeType : GraphNode> Default for GenericGraph<Root, NodeType> {
     fn default() -> Self
     {
         GenericGraph::new()
     }
 }
 
-impl <Root : Default, NodeType> GenericGraph<Root, NodeType> {
+impl <Root : Default + RootCollection, NodeType : GraphNode> GenericGraph<Root, NodeType> {
     pub fn new() -> Self
     {
         GenericGraph { root : Root::default(), internal : GraphRaw::new() }
     }
 }
 
-impl <Root, NodeType> GenericGraph<Root, NodeType> {
+impl <Root : RootCollection<NodeType = NodeType>, NodeType : GraphNode> GenericGraph<Root, NodeType> {
     /// Creates an AnchorMut from a generativity brand using selected cleanup strategy.
     /// Prefer anchor_mut macro in application code.
     /// # Safety
@@ -49,6 +57,22 @@ impl <Root, NodeType> GenericGraph<Root, NodeType> {
 
 pub type VecGraph<T> = GenericGraph<Vec<GraphPtr<'static, T>>, T>;
 
+pub trait RootCollection {
+    type NodeType;
+    //TODO: use SmallBox crate
+    //TODO2: use impl Iterator when available or monomophise manually
+    //LLVM SHOULD be able to devirtualize this iterator so performance hit SHOULDN'T be critical.
+    fn root_ptrs<'a>(&'a self) -> Box<dyn Iterator<Item = *mut Self::NodeType> + 'a>;
+}
+
+impl <NodeType : GraphNode> RootCollection for Vec<GraphPtr<'static, NodeType>> {
+    type NodeType = NodeType;
+    fn root_ptrs<'a>(&'a self) -> Box<dyn Iterator<Item = *mut Self::NodeType> + 'a>
+    {
+        Box::new(self.iter().map(|x| { x.as_mut() }))
+    }
+}
+
 /// A strategy AnchorMut employs to perform cleanup after drop.
 pub enum CleanupStrategy {
     /// AnchorMut never cleans up.
@@ -59,24 +83,41 @@ pub enum CleanupStrategy {
     AlwaysPrecise
 }
 
-pub struct AnchorMut<'this, 'id : 'this, T : 'this> {
+pub struct AnchorMut<'this, 'id : 'this, T : 'this>
+where T : GraphImpl
+{
     parent: &'this mut T,
     strategy : CleanupStrategy,
     _guard : Id<'id>,
 }
 
-impl <'this, 'id: 'this, N : 'this, E : 'this> Drop for AnchorMut<'this, 'id, VecGraph<NamedNode<N, E>>>
+impl <Root : RootCollection<NodeType = NodeType>, NodeType : GraphNode> GraphImpl
+for GenericGraph<Root, NodeType>
+{
+    fn cleanup_precise(&mut self) {
+        let iter = self.root.root_ptrs();
+        self.internal.cleanup_precise(iter);
+    }
+
+    fn cleanup(&mut self) {
+        self.cleanup_precise();
+    }
+
+}
+
+
+impl <'this, 'id: 'this, T : GraphImpl + 'this> Drop for AnchorMut<'this, 'id, T>
 {
     fn drop(&mut self) {
-        let iter = self.parent.root.iter_mut().map(|x| { x.as_mut() });
-        match self.strategy {
-            AlwaysPrecise => self.parent.internal.cleanup_precise(iter),
+        match &self.strategy {
+            CleanupStrategy::AlwaysPrecise => self.parent.cleanup_precise(),
+            CleanupStrategy::Always => self.parent.cleanup(),
             _ => ()
         }
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
+impl <'this, 'id : 'this, N : 'this, E : 'this, Root : RootCollection<NodeType = NamedNode<N, E>> + 'this>
 Index<GraphPtr<'id, NamedNode<N, E>>>
 for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 {
@@ -87,7 +128,7 @@ for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
+impl <'this, 'id : 'this, N : 'this, E : 'this, Root : RootCollection<NodeType = NamedNode<N, E>> + 'this>
 IndexMut<GraphPtr<'id, NamedNode<N, E>>>
 for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 {
@@ -100,22 +141,24 @@ for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 /// Creates an AnchorMut using selected cleanup strategy.
 macro_rules! anchor_mut
 {
-    ($name:ident, $strategy:ident) => {
+    ($name:ident, $strategy:tt) => {
         make_guard!(g);
-        let mut $name = unsafe { $name.anchor_mut(Id::from(g), $crate::CleanupStrategy::$strategy) };
+        let mut $name = unsafe { $name.anchor_mut(Id::from(g), $strategy) };
     };
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this, Root : 'this>
+impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this, Root : RootCollection<NodeType = NodeType> + 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NodeType>>
 where NodeType : GraphNode<Node = N, Edge = E>
 {
     fn internal(&self) -> &GraphRaw<NodeType> {
         &self.parent.internal
     }
+
     /// Creates a checked pointer from a raw pointer.
     /// # Safety
-    /// Caller must guarantee `raw` points to a node which was not cleaned up and belongs to the parent graph 
+    /// Caller must guarantee `raw` points to a node which was not cleaned up and belongs to the parent graph. 
+    /// If you really have to use a node from another graph, do not attach this pointer to the current collection.
     pub unsafe fn from_raw(&self, raw : *const NodeType) -> GraphPtr<'id, NodeType>
     {
         GraphPtr::from_ptr(raw, self._guard)
@@ -128,7 +171,7 @@ where NodeType : GraphNode<Node = N, Edge = E>
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this, Root : 'this>
+impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this, Root : RootCollection<NodeType = NodeType> + 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NodeType>>
 where NodeType : GraphNode<Node = N, Edge = E>
 {
@@ -144,6 +187,7 @@ where NodeType : GraphNode<Node = N, Edge = E>
     {
         let ptr = self.internal_mut().spawn_detached(data);
         unsafe {
+            //allocation never silently fails
             GraphPtr::from_ptr(ptr, self._guard )
         }
     }
@@ -173,9 +217,8 @@ where NodeType : GraphNode<Node = N, Edge = E>
     /// Allocates a new node and returns the pointer. Attaches the node to the root by Vec::push.
     pub fn spawn_attached(&mut self, data : N) -> GraphPtr<'id, NodeType>
     {
-        let res = self.internal_mut().spawn_detached(data);
-        let res = unsafe { self.from_raw(res)};
-        let a = unsafe { (res.into_static()) };
+        let res = self.spawn(data);
+        let a = res.into_static();
         self.parent.root.push(a);
         res
     }
@@ -183,6 +226,7 @@ where NodeType : GraphNode<Node = N, Edge = E>
     /// Provides safe direct access to the collection of the root.
     pub fn root(&self) -> &Vec<GraphPtr<'id, NodeType>>
     {
+        //(R)
         unsafe {
             transmute(&self.parent.root)
         }
@@ -191,13 +235,14 @@ where NodeType : GraphNode<Node = N, Edge = E>
     /// Provides safe mutable direct access to the collection of the root.
     pub fn root_mut(&mut self) -> &mut Vec<GraphPtr<'id, NodeType>>
     {
+        //(R)
         unsafe {
             transmute(&mut self.parent.root)
         }
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
+impl <'this, 'id : 'this, N : 'this, E : 'this, Root : RootCollection<NodeType = NamedNode<N, E>> + 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 {
     /// Returns an iterator over edges and node pointers attached to `src` node.
@@ -207,18 +252,19 @@ AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
+impl <'this, 'id : 'this, N : 'this, E : 'this, Root : RootCollection<NodeType = NamedNode<N,E>> + 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 {
     /// Returns a mutable iterator over edges and node pointers attached to `src` node.
-    pub fn edges_mut(&mut self, src : GraphPtr<'id, NamedNode<N, E>>) -> impl Iterator<Item = GraphIterRes<Edge<&'_ mut N, &'_ mut E>, GraphPtr<'id, NamedNode<N, E>>>>
+    pub fn edges_mut(&mut self, src : GraphPtr<'id, NamedNode<N, E>>) ->
+        impl Iterator<Item = GraphIterRes<Edge<&'_ mut N, &'_ mut E>, GraphPtr<'id, NamedNode<N, E>>>>
     {
         self.internal_mut().iter_mut(src)
     }
 
     /// Returns mutable views into different `src` and `dst` nodes or None if `src` is the same as `dst`.
-    pub fn bridge(&mut self, src : GraphPtr<'id, node_views::NamedNode<'id, N, E>>,
-                             dst : GraphPtr<'id, node_views::NamedNode<'id, N, E>>)
+    pub fn bridge(&mut self, src : GraphPtr<'id, NamedNode<N, E>>,
+                             dst : GraphPtr<'id, NamedNode<N, E>>)
         -> Option<(&'_ mut node_views::NamedNode<'id, N, E>, &'_ mut node_views::NamedNode<'id, N, E>)>
     {
         self.internal_mut().bridge(src, dst)
@@ -233,7 +279,8 @@ AnchorMut<'this, 'id, VecGraph<NamedNode<N, E>>>
     pub fn iter(&self) -> impl Iterator<Item = &'_ node_views::NamedNode<'id, N, E>>
     {
         self.parent.root.iter().map(|x| {
-            unsafe {
+        //(Q, R)
+        unsafe {
                 transmute(&*x.as_ptr())
             }
         })
@@ -243,6 +290,7 @@ AnchorMut<'this, 'id, VecGraph<NamedNode<N, E>>>
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &'_ mut node_views::NamedNode<'id, N, E>>
     {
         self.parent.root.iter_mut().map(|x| {
+            //(Q, R)
             unsafe {
                 transmute(&mut *x.as_mut())
             }
@@ -330,6 +378,13 @@ CursorMut<'this, 'id, NamedNode<N, E>>
     {
         self.parent.get_edge_mut(self.at(), dst)
     }
+
+    /// Returns mutable views into the current and `dst` nodes or None if current is the same as `dst`.
+    pub fn bridge(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>)
+        -> Option<(&'_ mut node_views::NamedNode<'id, N, E>, &'_ mut node_views::NamedNode<'id, N, E>)>
+    {
+        self.parent.bridge(self.at(), dst)
+    }
 }
 
 impl <'this, 'id : 'this, N : 'this, E : 'this> DerefMut for CursorMut<'this, 'id, NamedNode<N, E>>
@@ -338,3 +393,27 @@ impl <'this, 'id : 'this, N : 'this, E : 'this> DerefMut for CursorMut<'this, 'i
         self.parent.get_view_mut(self.at())
     }
 }
+
+
+struct A(i32);
+
+impl Drop for A {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+/*
+fn main() {
+    println!("hello");
+    let mut graph = VecGraph::<NamedNode<A, ()>>::new();
+    {
+        anchor_mut!(graph, Always);
+        let b = graph.spawn(A(0));
+        let a = graph.spawn_attached(A(2));
+
+        graph.spawn(A(3));
+        graph[a].refs.insert(b, ());
+    }
+    println!("bye");
+}*/

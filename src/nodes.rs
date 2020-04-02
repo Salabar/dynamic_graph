@@ -24,8 +24,8 @@ impl CleanupGen {
     }
 }
 
+
 /// A node type which uses node pointers as keys in the edge collection.
-#[derive(PartialEq, Eq)]
 #[repr(C)]
 pub struct NamedNode<N, E> {
     pub(crate) refs : HashMap<GraphPtr<'static, NamedNode<N, E>>, E>,
@@ -37,32 +37,11 @@ pub struct NamedNode<N, E> {
 /// be converted into a GraphPtr.
 pub mod node_views {
     use super::*;
-
     #[repr(C)]
     pub struct NamedNode<'id, N, E> {
         pub refs : HashMap<GraphPtr<'id, super::NamedNode<N, E>>, E>,
         pub data : N,
         //must not contain ServiceData as it allows to corrupt the graph using mem::swap
-    }
-
-    impl <'id, N, E> From<&NamedNode<'id, N, E>> for
-    GraphPtr<'id, super::NamedNode<N, E>>
-    {
-        fn from(item : &NamedNode<N, E>) -> Self {
-            unsafe {
-                transmute(item)
-            }
-        }
-    }
-
-    impl <'id, N, E> From<&mut NamedNode<'id, N, E>> for
-    GraphPtr<'id, super::NamedNode<N, E>>
-    {
-        fn from(item : &mut NamedNode<N, E>) -> Self {
-            unsafe {
-                transmute(item)
-            }
-        }
     }
 }
 
@@ -75,6 +54,9 @@ pub trait GraphNode : Sized {
     fn service(&self) -> &ServiceData;
     fn service_mut(&mut self) -> &mut ServiceData;
 
+    //TODO: use SmallBox
+    //TODO2: use impl Iterator when available or monomophise manually
+    fn edge_ptrs<'a>(&'a self) -> Box<dyn Iterator<Item = *mut Self> + 'a>;
     fn from_data(data : Self::Node) -> Self;
 }
 
@@ -92,17 +74,21 @@ impl <N, E> GraphNode for NamedNode<N, E> {
         &mut self.data
     }
 
-    fn from_data(data : Self::Node) -> Self
-    {
-        let service = ServiceData { cleanup_gen : CleanupGen::Even, store_index : 0 };
-        NamedNode { refs : HashMap::new(), data, service }
-    }
-
     fn service(&self) -> &ServiceData {
         &self.service
     }
     
     fn service_mut(&mut self) -> &mut ServiceData {
         &mut self.service
+    }
+
+    fn edge_ptrs<'a>(&'a self) -> Box<dyn Iterator<Item = *mut Self> + 'a> {
+        Box::new(self.refs.iter().map(|x| { x.0.as_mut() }))
+    }
+
+    fn from_data(data : Self::Node) -> Self
+    {
+        let service = ServiceData { cleanup_gen : CleanupGen::Even, store_index : 0 };
+        NamedNode { refs : HashMap::new(), data, service }
     }
 }
