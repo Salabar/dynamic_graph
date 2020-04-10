@@ -1,13 +1,10 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
-
+use std::cmp::*;
 use dynamic_graph::*;
-use dynamic_graph::edge::*;
 
 use dynamic_graph::CleanupStrategy::*;
-use dynamic_graph::CleanupStrategy;
 
-#[derive(PartialEq, Eq)]
 struct BfsNode {
     key : i32,
     distance : i32
@@ -30,7 +27,7 @@ fn breadth_first_search(graph : &mut VecGraph<NamedNode<BfsNode, ()>>) {
 
         let dist = cursor.data.distance;
 
-        for i in cursor.iter_mut() {
+        for i in cursor.edges_mut() {
             let ptr = i.ptr;
             let i = i.values.that().this;
             if i.distance == -1 {
@@ -43,7 +40,7 @@ fn breadth_first_search(graph : &mut VecGraph<NamedNode<BfsNode, ()>>) {
 }
 
 #[test]
-fn test_bfs_view() {
+fn test_bfs() {
     let mut graph = VecGraph::new();
     {
         anchor_mut!(graph, Never);
@@ -91,14 +88,18 @@ fn test_bfs_view() {
 type BFNode = NamedNode<usize, usize>;
 type BFRef<'id> = GraphPtr<'id, BFNode>;
 
-fn bellman_ford<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>, count : usize,
-                         source : BFRef<'a>) -> HashMap::<BFRef<'a>, BFRef<'a>>
+fn bellman_ford<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>,
+                    count : usize, source : BFRef<'a>) -> HashMap::<BFRef<'a>, BFRef<'a>>
 {
     let mut distance = HashMap::new();//from source node
     let mut path = HashMap::new();//(to;from)
 
+    if count == 0 {
+        return path;
+    }
+
     let mut cursor = graph.cursor(source);
-    for i in cursor.iter() {
+    for i in cursor.edges() {
         distance.insert(i.ptr, *i.values.edge());
         path.insert(i.ptr, source);
     }
@@ -108,7 +109,7 @@ fn bellman_ford<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>, count : usize,
         let nodes : Vec<_> = distance.keys().map(|x| {*x}).collect();
         for i in nodes {
             cursor.jump(i);
-            for j in cursor.iter() {
+            for j in cursor.edges() {
                 let edge = j.values.edge();
                 let j = j.ptr;
                 if !distance.contains_key(&j) ||
@@ -148,48 +149,50 @@ fn print_bf_path<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>,
 
 #[test]
 fn shortest_path_test() {
-    let mut graph = VecGraph::new();
-    anchor_mut!(graph, Never);
-    //Thomas Cormen, Introduction to Algorithms 2e, pic. 24.6
+    let mut graph = VecGraph::new(); 
+    {
+        anchor_mut!(graph, Never);
+        //Thomas Cormen, Introduction to Algorithms 2e, pic. 24.6
 
-    let source = graph.spawn_attached(0);
+        let source = graph.spawn_attached(0);
 
-    let n1 = graph.spawn(1);
-    let n2 = graph.spawn(2);
+        let n1 = graph.spawn(1);
+        let n2 = graph.spawn(2);
 
-    let n3 = graph.spawn(3);
-    let n4 = graph.spawn(4);
+        let n3 = graph.spawn(3);
+        let n4 = graph.spawn(4);
 
-    let refs = &mut graph[source].refs;
-    refs.insert(n1, 10);
-    refs.insert(n2, 5);
+        let refs = &mut graph[source].refs;
+        refs.insert(n1, 10);
+        refs.insert(n2, 5);
 
-    let refs = &mut graph[n1].refs;
-    refs.insert(n2, 2);
-    refs.insert(n3, 1);
-    
-    let refs = &mut graph[n2].refs;
+        let refs = &mut graph[n1].refs;
+        refs.insert(n2, 2);
+        refs.insert(n3, 1);
+        
+        let refs = &mut graph[n2].refs;
 
-    refs.insert(n1, 3);
-    refs.insert(n4, 2);
-    refs.insert(n3, 9);
+        refs.insert(n1, 3);
+        refs.insert(n4, 2);
+        refs.insert(n3, 9);
 
-    let refs = &mut graph[n4].refs;
-    refs.insert(n3, 6);
-    refs.insert(source, 7);
+        let refs = &mut graph[n4].refs;
+        refs.insert(n3, 6);
+        refs.insert(source, 7);
 
-    graph[n3].refs.insert(n4, 4);
+        graph[n3].refs.insert(n4, 4);
 
-    let path = bellman_ford(&graph, 5, source);
-    assert!(print_bf_path(&graph, &path, source, n1) == 8);
-    assert!(print_bf_path(&graph, &path, source, n2) == 5);
-    assert!(print_bf_path(&graph, &path, source, n3) == 9);
-    assert!(print_bf_path(&graph, &path, source, n4) == 7);
+        let path = bellman_ford(&graph, 5, source);
+        assert!(print_bf_path(&graph, &path, source, n1) == 8);
+        assert!(print_bf_path(&graph, &path, source, n2) == 5);
+        assert!(print_bf_path(&graph, &path, source, n3) == 9);
+        assert!(print_bf_path(&graph, &path, source, n4) == 7);
+    }
 }
 
 #[test]
-fn kill_smoke_test() {
-    let mut graph = VecGraph::<NamedNode<_, i32>>::new();
+fn test_kill_smoke() {
+    let mut graph = VecGraph::<NamedNode<_, ()>>::new();
     anchor_mut!(graph, AlwaysPrecise);
 
     let source = graph.spawn(0);
@@ -199,3 +202,122 @@ fn kill_smoke_test() {
 }
 
 
+struct FlowEdge {
+    capacity : i32,
+    flow : i32,
+}
+
+type FlowNode = NamedNode<(), FlowEdge>;
+type FlowRef<'id> = GraphPtr<'id, FlowNode>;
+
+fn find_path<'id>(graph : &AnchorMut<'id, 'id, VecGraph<FlowNode>>)
+               -> Option<HashMap<FlowRef<'id>, (FlowRef<'id>, i32)>>
+{
+    let mut path = HashMap::new();
+    let mut queue = VecDeque::new();
+
+    let root = graph.root();
+
+    let source = root[0];
+    let sink = root[1];
+
+    path.insert(source, (source, 0));
+    queue.push_back(source);
+    
+    while !queue.is_empty() {
+        let q = queue.pop_front().unwrap();
+
+        for i in graph.edges(q) {
+            let ptr = i.ptr;
+            let i = i.values.edge();
+            if !path.contains_key(&ptr) && i.capacity - i.flow > 0 {
+                path.insert(ptr, (q, i.capacity - i.flow));
+                queue.push_back(ptr);
+                if ptr == sink {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn edmonds_karp(graph : &mut VecGraph<FlowNode>) -> i32 {
+    anchor_mut!(graph, Never);
+
+    let root = graph.root();
+
+    let source = root[0];
+    let sink = root[1];
+
+    while let Some(path) = find_path(&graph) {
+        let last_step = &path[&sink];
+
+        let mut current = last_step.0;
+        let mut max_cut = last_step.1;
+
+        while current != source {
+            let cur_step = path[&current];
+            max_cut = min(max_cut, cur_step.1);
+            current = cur_step.0;
+        }
+
+        let mut cursor = graph.cursor_mut(sink);
+        while !cursor.is_at(source) {
+            let at = cursor.at();
+            let cur_step = path[&at];
+
+            cursor.refs.entry(cur_step.0).and_modify(|x| x.flow -= max_cut);
+
+            cursor.jump(cur_step.0);
+            cursor.refs.entry(at).and_modify(|x| x.flow += max_cut);
+        }
+    }
+    let flow = graph.edges(sink).map(|x| -x.values.edge().flow).sum();
+
+    flow
+}
+
+#[test]
+fn test_max_flow() {
+    let mut graph = VecGraph::new();
+    {
+        //Thomas Cormen, Introduction to Algorithms 2e, pic. 26.5
+        anchor_mut!(graph, AlwaysPrecise);
+        let source = graph.spawn_attached(());
+        let sink   = graph.spawn_attached(());
+
+        let v1 = graph.spawn(());
+        let v2 = graph.spawn(());
+        let v3 = graph.spawn(());
+        let v4 = graph.spawn(());
+
+        graph[source].refs.insert(v1,     FlowEdge { capacity : 16, flow : 0});
+        graph[v1]    .refs.insert(source, FlowEdge { capacity :  0, flow : 0});
+
+        graph[source].refs.insert(v2,     FlowEdge { capacity : 13, flow : 0});
+        graph[v2]    .refs.insert(source, FlowEdge { capacity :  0, flow : 0});
+
+        graph[v2].refs.insert(v1, FlowEdge { capacity :  4, flow : 0});
+        graph[v1].refs.insert(v2, FlowEdge { capacity : 10, flow : 0});
+
+        graph[v1].refs.insert(v3, FlowEdge { capacity : 12, flow : 0});
+        graph[v3].refs.insert(v1, FlowEdge { capacity :  0, flow : 0});
+
+        graph[v3].refs.insert(v2, FlowEdge { capacity :  9, flow : 0});
+        graph[v2].refs.insert(v3, FlowEdge { capacity :  0, flow : 0});
+
+        graph[v4].refs.insert(v3, FlowEdge { capacity :  7, flow : 0});
+        graph[v3].refs.insert(v4, FlowEdge { capacity :  0, flow : 0});
+
+        graph[v2].refs.insert(v4, FlowEdge { capacity : 14, flow : 0});
+        graph[v4].refs.insert(v2, FlowEdge { capacity :  0, flow : 0});
+
+        graph[v3]  .refs.insert(sink, FlowEdge { capacity : 20, flow : 0});
+        graph[sink].refs.insert(v3,   FlowEdge { capacity :  0, flow : 0});
+
+        graph[v4]  .refs.insert(sink, FlowEdge { capacity :  4, flow : 0});
+        graph[sink].refs.insert(v4,   FlowEdge { capacity :  0, flow : 0});
+    }
+    assert_eq!(edmonds_karp(&mut graph), 23);
+}

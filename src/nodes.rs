@@ -1,7 +1,6 @@
 use super::*;
 
 use std::collections::HashMap;
-use core::mem::transmute;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum CleanupGen {
@@ -9,7 +8,7 @@ pub enum CleanupGen {
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
-pub struct ServiceData {
+pub struct MetaData {
     pub(crate) cleanup_gen : CleanupGen,
     pub(crate) store_index: usize,
 }
@@ -26,22 +25,17 @@ impl CleanupGen {
 
 
 /// A node type which uses node pointers as keys in the edge collection.
-#[repr(C)]
 pub struct NamedNode<N, E> {
-    pub(crate) refs : HashMap<GraphPtr<'static, NamedNode<N, E>>, E>,
-    pub(crate) data : N,
-    pub(crate) service : ServiceData,
+    pub(crate) internal: node_views::NamedNode<'static, N, E>,
+    pub(crate) meta : MetaData,
 }
 
-/// Views into nodes allowing direct access to the nodes data and references. A reference to a view can
-/// be converted into a GraphPtr.
+/// Views into nodes allowing direct access to the nodes data and references.
 pub mod node_views {
     use super::*;
-    #[repr(C)]
     pub struct NamedNode<'id, N, E> {
         pub refs : HashMap<GraphPtr<'id, super::NamedNode<N, E>>, E>,
         pub data : N,
-        //must not contain ServiceData as it allows to corrupt the graph using mem::swap
     }
 }
 
@@ -51,11 +45,11 @@ pub trait GraphNode : Sized {
     fn get(&self) -> &Self::Node;
     fn get_mut(&mut self) -> &mut Self::Node;
 
-    fn service(&self) -> &ServiceData;
-    fn service_mut(&mut self) -> &mut ServiceData;
+    fn meta(&self) -> &MetaData;
+    fn meta_mut(&mut self) -> &mut MetaData;
 
     //TODO: use SmallBox
-    //TODO2: use impl Iterator when available or monomophise manually
+    //TODO2: use impl Iterator when available or monomorphise manually
     fn edge_ptrs<'a>(&'a self) -> Box<dyn Iterator<Item = *mut Self> + 'a>;
     fn from_data(data : Self::Node) -> Self;
 }
@@ -66,29 +60,29 @@ impl <N, E> GraphNode for NamedNode<N, E> {
 
     fn get(&self) -> &Self::Node
     {
-        &self.data
+        &self.internal.data
     }
 
     fn get_mut(&mut self) -> &mut Self::Node
     {
-        &mut self.data
+        &mut self.internal.data
     }
 
-    fn service(&self) -> &ServiceData {
-        &self.service
+    fn meta(&self) -> &MetaData {
+        &self.meta
     }
     
-    fn service_mut(&mut self) -> &mut ServiceData {
-        &mut self.service
+    fn meta_mut(&mut self) -> &mut MetaData {
+        &mut self.meta
     }
 
     fn edge_ptrs<'a>(&'a self) -> Box<dyn Iterator<Item = *mut Self> + 'a> {
-        Box::new(self.refs.iter().map(|x| { x.0.as_mut() }))
+        Box::new(self.internal.refs.iter().map(|x| { x.0.as_mut() }))
     }
 
     fn from_data(data : Self::Node) -> Self
     {
-        let service = ServiceData { cleanup_gen : CleanupGen::Even, store_index : 0 };
-        NamedNode { refs : HashMap::new(), data, service }
+        let meta = MetaData { cleanup_gen : CleanupGen::Even, store_index : 0 };
+        Self { internal : node_views::NamedNode { refs : HashMap::new(), data }, meta }
     }
 }
