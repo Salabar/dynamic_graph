@@ -16,7 +16,7 @@ use core::ops::{Index, IndexMut, Deref, DerefMut};
 use core::ptr::NonNull;
 
 pub struct GenericGraph<Root, NodeType>
-where Root : RootCollection,
+where Root : NodeCollection,
       NodeType : GraphNode,
 {
     internal : GraphRaw<NodeType>,
@@ -35,7 +35,7 @@ pub trait GraphImpl {
 }
 
 impl <Root, NodeType> Default for GenericGraph<Root, NodeType>
-where Root : RootCollection + Default,
+where Root : NodeCollection + Default,
       NodeType : GraphNode
 {
     fn default() -> Self
@@ -45,7 +45,7 @@ where Root : RootCollection + Default,
 }
 
 impl <Root, NodeType> GenericGraph<Root, NodeType>
-where Root : RootCollection + Default,
+where Root : NodeCollection + Default,
       NodeType : GraphNode
 {
     pub fn new() -> Self
@@ -55,7 +55,7 @@ where Root : RootCollection + Default,
 }
 
 impl <Root, NodeType> GenericGraph<Root, NodeType>
-where Root : RootCollection<NodeType = NodeType> + Default,
+where Root : NodeCollection<NodeType = NodeType> + Default,
       NodeType : GraphNode
 {
     /// Creates an AnchorMut from a generativity brand using selected cleanup strategy.
@@ -71,23 +71,7 @@ where Root : RootCollection<NodeType = NodeType> + Default,
 
 pub type VecGraph<T> = GenericGraph<Vec<GraphPtr<'static, T>>, T>;
 
-pub trait RootCollection {
-    type NodeType;
-    //TODO: use SmallBox crate
-    //TODO2: use impl Iterator when available or monomophise manually
-    //LLVM SHOULD be able to devirtualize this iterator so performance hit SHOULDN'T be critical.
-    fn root_ptrs<'a>(&'a self) -> Box<dyn Iterator<Item = *mut Self::NodeType> + 'a>;
-}
 
-impl <NodeType> RootCollection for Vec<GraphPtr<'static, NodeType>>
-where NodeType : GraphNode
-{
-    type NodeType = NodeType;
-    fn root_ptrs<'a>(&'a self) -> Box<dyn Iterator<Item = *mut Self::NodeType> + 'a>
-    {
-        Box::new(self.iter().map(|x| { x.as_mut() }))
-    }
-}
 
 /// A strategy AnchorMut employs to perform cleanup after drop.
 pub enum CleanupStrategy {
@@ -109,12 +93,11 @@ where T : GraphImpl
 
 impl <Root, NodeType> GraphImpl
 for GenericGraph<Root, NodeType>
-where Root : RootCollection<NodeType = NodeType>,
+where Root : NodeCollection<NodeType = NodeType>,
       NodeType : GraphNode
 {
     fn cleanup_precise(&mut self) {
-        let iter = self.root.root_ptrs();
-        self.internal.cleanup_precise(iter);
+        self.internal.cleanup_precise(&self.root);
     }
 }
 
@@ -134,7 +117,7 @@ where T : GraphImpl
 impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
 Index<GraphPtr<'id, NamedNode<N, E>>>
 for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
-where Root : RootCollection<NodeType = NamedNode<N, E>>
+where Root : NodeCollection<NodeType = NamedNode<N, E>>
 {
     type Output = node_views::NamedNode<'id, N, E>;
     fn index(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &Self::Output
@@ -146,7 +129,7 @@ where Root : RootCollection<NodeType = NamedNode<N, E>>
 impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
 IndexMut<GraphPtr<'id, NamedNode<N, E>>>
 for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
-where Root : RootCollection<NodeType = NamedNode<N, E>>
+where Root : NodeCollection<NodeType = NamedNode<N, E>>
 {
     fn index_mut(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &mut Self::Output {
         self.internal_mut().get_view_mut(dst)
@@ -170,7 +153,7 @@ macro_rules! anchor_mut
 impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this, Root : 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NodeType>>
 where NodeType : GraphNode<Node = N, Edge = E>,
-      Root : RootCollection<NodeType = NodeType>
+      Root : NodeCollection<NodeType = NodeType>
 {
     fn internal(&self) -> &GraphRaw<NodeType> {
         &self.parent.internal
@@ -195,7 +178,7 @@ where NodeType : GraphNode<Node = N, Edge = E>,
 impl <'this, 'id : 'this, N : 'this, E : 'this, NodeType : 'this, Root : 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NodeType>>
 where NodeType : GraphNode<Node = N, Edge = E>,
-      Root : RootCollection<NodeType = NodeType>
+      Root : NodeCollection<NodeType = NodeType>
 {
     fn internal_mut(&mut self) -> &mut GraphRaw<NodeType>
     {
@@ -265,7 +248,7 @@ where NodeType : GraphNode<Node = N, Edge = E>
 
 impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
-where Root : RootCollection<NodeType = NamedNode<N, E>>
+where Root : NodeCollection<NodeType = NamedNode<N, E>>
 {
     /// Returns an iterator over edges attached to `src` node.
     pub fn edges(&self, src : GraphPtr<'id, NamedNode<N, E>>) ->
@@ -277,7 +260,7 @@ where Root : RootCollection<NodeType = NamedNode<N, E>>
 
 impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
-where Root : RootCollection<NodeType = NamedNode<N,E>>
+where Root : NodeCollection<NodeType = NamedNode<N,E>>
 {
     /// Returns a mutable iterator over edges attached to `src` node.
     pub fn edges_mut(&mut self, src : GraphPtr<'id, NamedNode<N, E>>) ->

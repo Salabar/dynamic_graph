@@ -33,10 +33,12 @@ pub struct NamedNode<N, E> {
 /// Views into nodes allowing direct access to the nodes data and references.
 pub mod node_views {
     use super::*;
+
     pub struct NamedNode<'id, N, E> {
         pub refs : HashMap<GraphPtr<'id, super::NamedNode<N, E>>, E>,
         pub data : N,
     }
+
 }
 
 pub trait GraphNode : Sized {
@@ -48,9 +50,8 @@ pub trait GraphNode : Sized {
     fn meta(&self) -> &MetaData;
     fn meta_mut(&mut self) -> &mut MetaData;
 
-    //TODO: use SmallBox
-    //TODO2: use impl Iterator when available or monomorphise manually
-    fn edge_ptrs<'a>(&'a self) -> Box<dyn Iterator<Item = *mut Self> + 'a>;
+    fn traverse(&self, cleanup : &mut CleanupState<Self>);
+
     fn from_data(data : Self::Node) -> Self;
 }
 
@@ -76,13 +77,41 @@ impl <N, E> GraphNode for NamedNode<N, E> {
         &mut self.meta
     }
 
-    fn edge_ptrs<'a>(&'a self) -> Box<dyn Iterator<Item = *mut Self> + 'a> {
-        Box::new(self.internal.refs.iter().map(|x| { x.0.as_mut() }))
+    fn traverse(&self, cleanup : &mut CleanupState<Self>) {
+        NodeCollection::traverse(&self.internal.refs, cleanup);
     }
 
     fn from_data(data : Self::Node) -> Self
     {
         let meta = MetaData { cleanup_gen : CleanupGen::Even, store_index : 0 };
         Self { internal : node_views::NamedNode { refs : HashMap::new(), data }, meta }
+    }
+}
+
+pub trait NodeCollection : Sized {
+    type NodeType;
+    fn traverse(this : &Self, cleanup : &mut CleanupState<Self::NodeType>);
+}
+
+impl <NodeType> NodeCollection for Vec<GraphPtr<'static, NodeType>>
+where NodeType : GraphNode
+{
+    type NodeType = NodeType;
+    fn traverse(this : &Self, cleanup : &mut CleanupState<NodeType>) {
+        for i in this.iter().map(|x| x.as_mut()) {
+            cleanup.touch(i);
+        }
+    }
+}
+
+
+impl <N, E, NodeType> NodeCollection for HashMap<GraphPtr<'static, NodeType>, E>
+where NodeType : GraphNode<Node = N>
+{
+    type NodeType = NodeType;
+    fn traverse(this : &Self, cleanup : &mut CleanupState<NodeType>) {
+        for i in this.iter().map(|x| x.0.as_mut()) {
+            cleanup.touch(i);
+        }
     }
 }

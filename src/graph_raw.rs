@@ -7,6 +7,24 @@ pub (crate) struct GraphRaw<T> {
     pub(crate) cleanup_gen : CleanupGen,
 }
 
+pub struct CleanupState<'this, T> 
+{
+    parent : &'this mut GraphRaw<T>,
+    queue : VecDeque<*mut T>,
+    index : usize
+}
+
+impl <NodeType> CleanupState<'_, NodeType>
+where NodeType : GraphNode
+{
+    pub fn touch(&mut self, node : *mut NodeType) {
+        if self.parent.touch(self.index, node) {
+            self.index += 1;
+            self.queue.push_back(node);
+        }
+    }
+}
+
 //Invariant Q: A graph node only contains references to existing nodes.
 
 //Theorem W: A GraphPtr never dangles.
@@ -137,36 +155,20 @@ where NodeType : GraphNode<Node = N, Edge = E>
         })
     }
 
-    pub(crate) fn cleanup_precise<'b>(&'b mut self, root : Box<dyn Iterator<Item = *mut NodeType> + 'b>)
+    pub(crate) fn cleanup_precise<Root : NodeCollection<NodeType = NodeType>>(&mut self, root : &Root)
     {
         self.cleanup_gen.flip();
-        let mut index = 0;
-        let mut queue = VecDeque::new();
-        for i in root {
-            if self.touch(index, i) {
-                index += 1;
-                queue.push_back(i);
-            }
-        }
+        let mut state = CleanupState { parent : self, index : 0, queue : VecDeque::new() };
+        NodeCollection::traverse(root, &mut state);
 
-        while !queue.is_empty() {
-            let q = queue.pop_front().unwrap();
-            let iter = {
-                //E
-                //*q is dropped after this line and will not alias
-                unsafe {
-                    (*q).edge_ptrs()
-                }
-            };
-
-            for i in iter {
-                if self.touch(index, i) {
-                    index += 1;
-                    queue.push_back(i);
-                }
+        while !state.queue.is_empty() {
+            let q = state.queue.pop_front().unwrap();
+            unsafe {
+                (*q).traverse(&mut state);
             }
         }
         //Every accessible node is stored before index.
+        let index = state.index;
         self.data.truncate(index);
         self.data.shrink_to_fit();
     }
