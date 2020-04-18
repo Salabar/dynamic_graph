@@ -29,7 +29,9 @@ pub trait GraphImpl {
     fn cleanup_precise(&mut self);
     /// Traverses the graph and drops inaccessible nodes. This method will miss some of the leaked items which
     /// might result in spikes in memory usage. !! Currently, none of the possible heuristics are implemented.
-    fn cleanup(&mut self);
+    fn cleanup(&mut self) {
+        self.cleanup_precise();
+    }
 }
 
 impl <Root, NodeType> Default for GenericGraph<Root, NodeType>
@@ -114,10 +116,6 @@ where Root : RootCollection<NodeType = NodeType>,
         let iter = self.root.root_ptrs();
         self.internal.cleanup_precise(iter);
     }
-
-    fn cleanup(&mut self) {
-        self.cleanup_precise();
-    }
 }
 
 
@@ -162,6 +160,10 @@ macro_rules! anchor_mut
     ($name:ident, $strategy:tt) => {
         make_guard!(g);
         let mut $name = unsafe { $name.anchor_mut(Id::from(g), $strategy) };
+    };
+    ($name:ident, $parent:tt, $strategy:tt) => {
+        make_guard!(g);
+        let mut $name = unsafe { $parent.anchor_mut(Id::from(g), $strategy) };
     };
 }
 

@@ -292,32 +292,33 @@ fn test_max_flow() {
         let v3 = graph.spawn(());
         let v4 = graph.spawn(());
 
-        graph[source].refs.insert(v1,     FlowEdge { capacity : 16, flow : 0});
-        graph[v1]    .refs.insert(source, FlowEdge { capacity :  0, flow : 0});
+        let f = |capacity| FlowEdge { capacity, flow : 0 };
+        graph[source].refs.insert(v1,     f(16));
+        graph[v1]    .refs.insert(source, f(0 ));
 
-        graph[source].refs.insert(v2,     FlowEdge { capacity : 13, flow : 0});
-        graph[v2]    .refs.insert(source, FlowEdge { capacity :  0, flow : 0});
+        graph[source].refs.insert(v2,     f(13));
+        graph[v2]    .refs.insert(source, f(0 ));
 
-        graph[v2].refs.insert(v1, FlowEdge { capacity :  4, flow : 0});
-        graph[v1].refs.insert(v2, FlowEdge { capacity : 10, flow : 0});
+        graph[v2].refs.insert(v1, f(4 ));
+        graph[v1].refs.insert(v2, f(10));
 
-        graph[v1].refs.insert(v3, FlowEdge { capacity : 12, flow : 0});
-        graph[v3].refs.insert(v1, FlowEdge { capacity :  0, flow : 0});
+        graph[v1].refs.insert(v3, f(12));
+        graph[v3].refs.insert(v1, f(0 ));
 
-        graph[v3].refs.insert(v2, FlowEdge { capacity :  9, flow : 0});
-        graph[v2].refs.insert(v3, FlowEdge { capacity :  0, flow : 0});
+        graph[v3].refs.insert(v2, f(9));
+        graph[v2].refs.insert(v3, f(0));
 
-        graph[v4].refs.insert(v3, FlowEdge { capacity :  7, flow : 0});
-        graph[v3].refs.insert(v4, FlowEdge { capacity :  0, flow : 0});
+        graph[v4].refs.insert(v3, f(7));
+        graph[v3].refs.insert(v4, f(0));
 
-        graph[v2].refs.insert(v4, FlowEdge { capacity : 14, flow : 0});
-        graph[v4].refs.insert(v2, FlowEdge { capacity :  0, flow : 0});
+        graph[v2].refs.insert(v4, f(14));
+        graph[v4].refs.insert(v2, f(0 ));
 
-        graph[v3]  .refs.insert(sink, FlowEdge { capacity : 20, flow : 0});
-        graph[sink].refs.insert(v3,   FlowEdge { capacity :  0, flow : 0});
+        graph[v3]  .refs.insert(sink, f(20));
+        graph[sink].refs.insert(v3,   f(0 ));
 
-        graph[v4]  .refs.insert(sink, FlowEdge { capacity :  4, flow : 0});
-        graph[sink].refs.insert(v4,   FlowEdge { capacity :  0, flow : 0});
+        graph[v4]  .refs.insert(sink, f(4));
+        graph[sink].refs.insert(v4,   f(0));
     }
     assert_eq!(edmonds_karp(&mut graph), 23);
 }
