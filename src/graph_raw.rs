@@ -38,8 +38,8 @@ where NodeType : GraphNode
 // 2. A reference bound to &self/&mut self  is dropped when another function bound to &mut self is called.
 // 3. A GraphPtr can only be dereferenced by calling a function bound to &self.
 
-impl <'a, N : 'a, E : 'a, NodeType> GraphRaw<NodeType>
-where NodeType : GraphNode<Node = N, Edge = E>
+impl <'a, N : 'a, NodeType> GraphRaw<NodeType>
+where NodeType : GraphNode<Node = N>
 {
     pub(crate) fn spawn_detached(&mut self, data : N) -> *const NodeType
     {
@@ -111,7 +111,7 @@ where NodeType : GraphNode<Node = N, Edge = E>
         }
     }
 
-    pub(crate) fn iter_from_raw<'id : 'a, Iter : 'a>(&'a self, src : GraphPtr<'id, NodeType>, iter : Iter)
+    pub(crate) fn iter_from_raw<'id : 'a, Iter : 'a, E : 'a>(&'a self, src : GraphPtr<'id, NodeType>, iter : Iter)
         -> impl Iterator<Item = GraphIterRes<Edge<&'a N, &'a E>, GraphPtr<'id, NodeType>>>
     where Iter : Iterator<Item = (*const NodeType, &'a E)>
     {
@@ -132,7 +132,7 @@ where NodeType : GraphNode<Node = N, Edge = E>
         })
     }
 
-    pub(crate) fn iter_mut_from_raw<'id : 'a, Iter : 'a>(&'a mut self, src : GraphPtr<'id, NodeType>, iter : Iter)
+    pub(crate) fn iter_mut_from_raw<'id : 'a, Iter : 'a, E: 'a>(&'a mut self, src : GraphPtr<'id, NodeType>, iter : Iter)
         -> impl Iterator<Item = GraphIterRes<Edge<&'a mut N, &'a mut E>, GraphPtr<'id, NodeType>>>
     where Iter : Iterator<Item = (*mut NodeType, &'a mut E)>
     {
@@ -155,14 +155,13 @@ where NodeType : GraphNode<Node = N, Edge = E>
         })
     }
 
-    pub(crate) fn cleanup_precise<Root : NodeCollection<NodeType = NodeType>>(&mut self, root : &Root)
+    pub(crate) fn cleanup_precise(&mut self, root : &impl RootCollection<NodeType = NodeType>)
     {
         self.cleanup_gen.flip();
         let mut state = CleanupState { parent : self, index : 0, queue : VecDeque::new() };
-        NodeCollection::traverse(root, &mut state);
+        RootCollection::traverse(root, &mut state);
 
-        while !state.queue.is_empty() {
-            let q = state.queue.pop_front().unwrap();
+        while let Some(q) = state.queue.pop_front() {
             unsafe {
                 (*q).traverse(&mut state);
             }

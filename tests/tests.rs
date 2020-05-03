@@ -20,8 +20,7 @@ fn breadth_first_search(graph : &mut VecGraph<NamedNode<BfsNode, ()>>) {
     let mut queue = VecDeque::new();
     queue.push_back(root);
 
-    while !queue.is_empty() {
-        let q = queue.pop_front().unwrap();
+    while let Some(q) = queue.pop_front() {
         cursor.jump(q);
         println!("Visiting {}", cursor.data.key);
 
@@ -106,7 +105,7 @@ fn bellman_ford<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>,
     distance.insert(source, 0);
 
     for _ in 0..count - 1 {
-        let nodes : Vec<_> = distance.keys().map(|x| {*x}).collect();
+        let nodes : Vec<_> = distance.keys().map(|x| *x).collect();
         for i in nodes {
             cursor.jump(i);
             for j in cursor.edges() {
@@ -217,16 +216,13 @@ fn find_path<'id>(graph : &AnchorMut<'id, 'id, VecGraph<FlowNode>>)
     let mut queue = VecDeque::new();
 
     let root = graph.root();
-
     let source = root[0];
     let sink = root[1];
 
     path.insert(source, (source, 0));
     queue.push_back(source);
     
-    while !queue.is_empty() {
-        let q = queue.pop_front().unwrap();
-
+    while let Some(q) = queue.pop_front() {
         for i in graph.edges(q) {
             let ptr = i.ptr;
             let i = i.values.edge();
@@ -294,16 +290,16 @@ fn test_max_flow() {
 
         let f = |capacity| FlowEdge { capacity, flow : 0 };
         graph[source].refs.insert(v1,     f(16));
-        graph[v1]    .refs.insert(source, f(0 ));
+        graph[v1]    .refs.insert(source, f( 0));
 
         graph[source].refs.insert(v2,     f(13));
-        graph[v2]    .refs.insert(source, f(0 ));
+        graph[v2]    .refs.insert(source, f( 0));
 
-        graph[v2].refs.insert(v1, f(4 ));
+        graph[v2].refs.insert(v1, f( 4));
         graph[v1].refs.insert(v2, f(10));
 
         graph[v1].refs.insert(v3, f(12));
-        graph[v3].refs.insert(v1, f(0 ));
+        graph[v3].refs.insert(v1, f( 0));
 
         graph[v3].refs.insert(v2, f(9));
         graph[v2].refs.insert(v3, f(0));
@@ -312,10 +308,10 @@ fn test_max_flow() {
         graph[v3].refs.insert(v4, f(0));
 
         graph[v2].refs.insert(v4, f(14));
-        graph[v4].refs.insert(v2, f(0 ));
+        graph[v4].refs.insert(v2, f( 0));
 
         graph[v3]  .refs.insert(sink, f(20));
-        graph[sink].refs.insert(v3,   f(0 ));
+        graph[sink].refs.insert(v3,   f( 0));
 
         graph[v4]  .refs.insert(sink, f(4));
         graph[sink].refs.insert(v4,   f(0));

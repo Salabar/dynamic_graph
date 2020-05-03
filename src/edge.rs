@@ -8,22 +8,22 @@ pub struct GraphIterRes<E, T> {
 }
 
 pub struct EdgeBoth<N, E> {
-    ///Value from the source node.
+    /// Value from the source node.
     pub this : N,
-    ///Value from the destination node.
+    /// Value from the destination node.
     pub that : N,
-    ///Value from the edge.
+    /// Value from the edge.
     pub edge : E
 }
 
 pub struct EdgeLoop<N, E> {
-    ///Value from the node.
+    /// Value from the node.
     pub this : N,
-    ///Value from the edge.
+    /// Value from the edge.
     pub edge : E
 }
 
-///View into nodes data connected by an edge. Both if the edge connects two different nodes and Loop if the edge loops back to the source node.
+/// View into nodes data connected by an edge. Both if the edge connects two different nodes and Loop if the edge loops back to the source node.
 pub enum Edge<N, E> {
     Both(EdgeBoth<N, E>),
     Loop(EdgeLoop<N, E>),
@@ -76,7 +76,7 @@ impl <N, E> OptionEdge<N, E> for Option<Edge<N, E>>
 }
 
 impl <N, E> Edge<N, E> {
-    ///Returns data from the source node and the edge.
+    /// Returns data from the source node and the edge.
     pub fn this(self) -> EdgeLoop<N, E>
     {
         match self {
@@ -85,7 +85,7 @@ impl <N, E> Edge<N, E> {
         }
     }
 
-    ///Returns data from the destination node and the edge.
+    /// Returns data from the destination node and the edge.
     pub fn that(self) -> EdgeLoop<N, E>
     {
         match self {
@@ -94,7 +94,7 @@ impl <N, E> Edge<N, E> {
         }
     }
 
-    ///Returns data from both nodes and the edge. Returns None if self is a Loop.
+    /// Returns data from both nodes and the edge. Returns None if self is a Loop.
     pub fn both(self) -> Option<EdgeBoth<N, E>>
     {
         match self {
