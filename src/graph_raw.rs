@@ -1,9 +1,12 @@
 use super::*;
 
+pub mod shared_box;
+use crate::shared_box::*;
+
 use std::collections::VecDeque;
 
 pub (crate) struct GraphRaw<T> {
-    pub(crate) data : Vec<Box<T>>,
+    pub(crate) data : Vec<SharedBox<T>>,
     pub(crate) cleanup_gen : CleanupGen,
 }
 
@@ -43,11 +46,11 @@ where NodeType : GraphNode<Node = N>
 {
     pub(crate) fn spawn_detached(&mut self, data : N) -> *const NodeType
     {
-        let mut node = Box::new(NodeType::from_data(data));
+        let mut node = SharedBox::new(NodeType::from_data(data));
         node.meta_mut().store_index = self.data.len();
         node.meta_mut().cleanup_gen = self.cleanup_gen;
 
-        let ptr : *const NodeType = &*node;
+        let ptr = SharedBox::as_ptr(&node);
 
         self.data.push(node);
         ptr

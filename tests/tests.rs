@@ -104,16 +104,18 @@ fn bellman_ford<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>,
     }
     distance.insert(source, 0);
 
+    let mut nodes = Vec::with_capacity(count);
     for _ in 0..count - 1 {
-        let nodes : Vec<_> = distance.keys().map(|x| *x).collect();
-        for i in nodes {
-            cursor.jump(i);
+        nodes.clear();
+        nodes.extend(distance.keys().map(|x| *x));
+        for i in &nodes {
+            cursor.jump(*i);
             for j in cursor.edges() {
                 let edge = j.values.edge();
                 let j = j.ptr;
                 if !distance.contains_key(&j) ||
                     distance[&j] > distance[&i] + edge {
-                    path.insert(j, i);
+                    path.insert(j, *i);
                     distance.insert(j, distance[&i] + edge);
                 }
             }
@@ -239,7 +241,7 @@ fn find_path<'id>(graph : &AnchorMut<'id, 'id, VecGraph<FlowNode>>)
 }
 
 fn edmonds_karp(graph : &mut VecGraph<FlowNode>) -> i32 {
-    anchor_mut!(graph, Never);
+    anchor_mut!(graph, AlwaysPrecise);
 
     let root = graph.root();
 
@@ -289,6 +291,7 @@ fn test_max_flow() {
         let v4 = graph.spawn(());
 
         let f = |capacity| FlowEdge { capacity, flow : 0 };
+
         graph[source].refs.insert(v1,     f(16));
         graph[v1]    .refs.insert(source, f( 0));
 
