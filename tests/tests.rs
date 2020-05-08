@@ -38,6 +38,7 @@ fn breadth_first_search(graph : &mut VecGraph<NamedNode<BfsNode, ()>>) {
     }
 }
 
+
 #[test]
 fn test_bfs() {
     let mut graph = VecGraph::new();
@@ -51,35 +52,22 @@ fn test_bfs() {
         }
         graph.root_mut().push(vec[0]);
 
-        for i in &[vec[1], vec[3]] {
-            graph[vec[0]].refs.insert(*i, ());
-        }        
-
-        for i in &[vec[0], vec[2]] {
-            graph[vec[1]].refs.insert(*i, ());
+        fn bfs_edges<'id, T>(nodes : &[GraphPtr<'id, T>]) -> HashMap<GraphPtr<'id, T>, ()> {
+            let mut res = HashMap::new();
+            for i in nodes {
+                res.insert(*i, ());
+            }
+            res
         }
-
+        
+        graph[vec[0]].refs = bfs_edges(&[vec[1], vec[3]]);
+        graph[vec[1]].refs = bfs_edges(&[vec[0], vec[2]]);
         graph[vec[2]].refs.insert(vec[1], ());
-
-        for i in &[vec[0], vec[4], vec[5]] {
-            graph[vec[3]].refs.insert(*i, ());
-        }
-
-        for i in &[vec[3], vec[5], vec[6]] {
-            graph[vec[4]].refs.insert(*i, ());
-        }
-
-        for i in &[vec[3], vec[4], vec[6], vec[7]] {
-            graph[vec[5]].refs.insert(*i, ());
-        }
-
-        for i in &[vec[4], vec[5], vec[7]] {
-            graph[vec[6]].refs.insert(*i, ());
-        }
-
-        for i in &[vec[5], vec[6]] {
-            graph[vec[7]].refs.insert(*i, ());
-        }
+        graph[vec[3]].refs = bfs_edges(&[vec[0], vec[4], vec[5]]);
+        graph[vec[4]].refs = bfs_edges(&[vec[3], vec[5], vec[6]]);
+        graph[vec[5]].refs = bfs_edges(&[vec[3], vec[4], vec[6], vec[7]]);
+        graph[vec[6]].refs = bfs_edges(&[vec[4], vec[5], vec[7]]);
+        graph[vec[7]].refs = bfs_edges(&[vec[5], vec[6]]);
     }
     breadth_first_search(&mut graph);
 }
@@ -91,7 +79,7 @@ fn bellman_ford<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>,
                     count : usize, source : BFRef<'a>) -> HashMap::<BFRef<'a>, BFRef<'a>>
 {
     let mut distance = HashMap::new();//from source node
-    let mut path = HashMap::new();//(to;from)
+    let mut     path = HashMap::new();//(to;from)
 
     if count == 0 {
         return path;
@@ -132,10 +120,10 @@ fn print_bf_path<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>,
     let mut full_len = 0;
     if path.contains_key(&target) {
         while !cursor.is_at(source) {
-            let cur = cursor.at();
+            let cur  = cursor.at();
             let prev = path[&cur];
 
-            let cur_key = cursor.data;
+            let cur_key  = cursor.data;
             let prev_key = graph[prev].data;
 
             cursor.jump(prev);
@@ -155,8 +143,9 @@ fn shortest_path_test() {
         anchor_mut!(graph, Never);
         //Thomas Cormen, Introduction to Algorithms 2e, pic. 24.6
 
-        let source = graph.spawn_attached(0);
-
+        let source = graph.spawn(0);
+        graph.root_mut().push(source);
+    
         let n1 = graph.spawn(1);
         let n2 = graph.spawn(2);
 
@@ -218,8 +207,9 @@ fn find_path<'id>(graph : &AnchorMut<'id, 'id, VecGraph<FlowNode>>)
     let mut queue = VecDeque::new();
 
     let root = graph.root();
+
     let source = root[0];
-    let sink = root[1];
+    let sink   = root[1];
 
     path.insert(source, (source, 0));
     queue.push_back(source);
@@ -230,10 +220,10 @@ fn find_path<'id>(graph : &AnchorMut<'id, 'id, VecGraph<FlowNode>>)
             let i = i.values.edge();
             if !path.contains_key(&ptr) && i.capacity - i.flow > 0 {
                 path.insert(ptr, (q, i.capacity - i.flow));
-                queue.push_back(ptr);
                 if ptr == sink {
                     return Some(path);
                 }
+                queue.push_back(ptr);
             }
         }
     }
@@ -246,7 +236,7 @@ fn edmonds_karp(graph : &mut VecGraph<FlowNode>) -> i32 {
     let root = graph.root();
 
     let source = root[0];
-    let sink = root[1];
+    let sink   = root[1];
 
     while let Some(path) = find_path(&graph) {
         let last_step = &path[&sink];
@@ -282,8 +272,10 @@ fn test_max_flow() {
     {
         //Thomas Cormen, Introduction to Algorithms 2e, pic. 26.5
         anchor_mut!(graph, AlwaysPrecise);
-        let source = graph.spawn_attached(());
-        let sink   = graph.spawn_attached(());
+        let source = graph.spawn(());
+        let sink   = graph.spawn(());
+
+        *graph.root_mut() = vec![source, sink];
 
         let v1 = graph.spawn(());
         let v2 = graph.spawn(());
@@ -320,4 +312,22 @@ fn test_max_flow() {
         graph[sink].refs.insert(v4,   f(0));
     }
     assert_eq!(edmonds_karp(&mut graph), 23);
+}
+
+
+
+#[test]
+fn test_owner() {
+    let mut graph = VecGraph::<NamedNode<i32,i32>>::new();
+    {
+        //Thomas Cormen, Introduction to Algorithms 2e, pic. 26.5
+        anchor_mut!(graph, AlwaysPrecise);
+        let source = graph.spawn(1);
+
+        let c = graph.cursor_mut(source);
+        //let mut it1 = c.edges_mut();
+        let c = graph.cursor_mut(source);
+
+//        it1.next();
+    }
 }

@@ -162,7 +162,6 @@ where NodeType : GraphNode<Node = N>,
     /// Creates a checked pointer from a raw pointer.
     /// # Safety
     /// Caller must guarantee `raw` points to a node which was not cleaned up and belongs to the parent graph. 
-    /// If you really have to use a node from another graph, do not attach this pointer to the current collection.
     pub unsafe fn from_raw(&self, raw : *const NodeType) -> GraphPtr<'id, NodeType>
     {
         GraphPtr::from_ptr(raw, self._guard)
@@ -213,7 +212,7 @@ where NodeType : GraphNode<Node = N>,
     }
 }
 
-
+/* TODO in a smarter way
 impl <'this, 'id : 'this, N : 'this, NodeType : 'this>
 AnchorMut<'this, 'id, VecGraph<NodeType>>
 where NodeType : GraphNode<Node = N>
@@ -255,6 +254,7 @@ where NodeType : GraphNode<Node = N>
         res
     }
 }
+*/
 
 macro_rules! impl_generic_graph_root {
     ($collection:ident, $graph:ident) => {
@@ -335,7 +335,7 @@ AnchorMut<'this, 'id, VecGraph<NamedNode<N, E>>>
         //GraphRaw.rs get_view_mut
         self.root_mut().iter_mut().map(move |x| {
             unsafe {
-                transmute(&mut (*x.as_mut()).internal)
+                (*x.as_mut()).get_view_mut()
             }
         })
     }

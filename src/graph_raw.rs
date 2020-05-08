@@ -183,12 +183,10 @@ impl <N, E> GraphRaw<NamedNode<N, E>>
         -> Option<(&'_ mut node_views::NamedNode<'id, N, E>, &'_ mut node_views::NamedNode<'id, N, E>)>
     {
         if src != dst { 
-            unsafe {
-                //this transmute only affects lifetime parameter
-                let src = transmute(&mut (*src.as_mut()).internal);
-                let dst = self.get_view_mut(dst);
-                Some((src, dst))
-            }
+            //this transmute only affects lifetime parameter
+            let src = unsafe { (*src.as_mut()).get_view_mut() };
+            let dst = self.get_view_mut(dst);
+            Some((src, dst))
         } else {
             None
         }
@@ -243,18 +241,16 @@ impl <N, E> GraphRaw<NamedNode<N, E>>
     pub(crate) fn get_view<'id>(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &node_views::NamedNode<'id, N, E>
     {
         //(E)
-        //this transmute only affects lifetime parameter
         unsafe {
-            transmute(&(*dst.as_ptr()).internal)
+            (*dst.as_ptr()).get_view()
         }
     }
 
     pub(crate) fn get_view_mut<'id>(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &mut node_views::NamedNode<'id, N, E>
     {
         //(E)
-        //this transmute only affects lifetime parameter
         unsafe {
-            transmute(&mut (*dst.as_mut()).internal)
+            (*dst.as_mut()).get_view_mut()
         }
     }
 
@@ -270,14 +266,14 @@ impl <N, E> GraphRaw<NamedNode<N, E>>
         }))
     }
 
-    pub(crate) fn iter_mut<'a, 'id : 'a>(&'a mut self, dst : GraphPtr<'id, NamedNode<N, E>>)
+    pub(crate) fn iter_mut<'a, 'id : 'a>(&'a mut self, src : GraphPtr<'id, NamedNode<N, E>>)
         -> impl Iterator<Item = GraphIterRes<Edge<&'a mut N, &'a mut E>, GraphPtr<'id, NamedNode<N, E>>>>
     {
         //(E)
-        let current = dst.as_mut();
+        let current = src.as_mut();
         //*current is dropped before closure is ever invoked and does not alias
         let node_refs = unsafe { &mut (*current).internal.refs };
-        self.iter_mut_from_raw(dst, node_refs.iter_mut().map(|x| {
+        self.iter_mut_from_raw(src, node_refs.iter_mut().map(|x| {
             let p = x.0.as_mut();
             (p, x.1)
         }))

@@ -23,7 +23,18 @@ impl CleanupGen {
     }
 }
 
+pub trait GraphNode : Sized {
+    type Node;
+    fn get(&self) -> &Self::Node;
+    fn get_mut(&mut self) -> &mut Self::Node;
 
+    fn meta(&self) -> &MetaData;
+    fn meta_mut(&mut self) -> &mut MetaData;
+
+    fn traverse(&self, cleanup : &mut CleanupState<Self>);
+
+    fn from_data(data : Self::Node) -> Self;
+}
 /// A node type which uses node pointers as keys in the edge collection.
 pub struct NamedNode<N, E> {
     pub(crate) internal: node_views::NamedNode<'static, N, E>,
@@ -39,17 +50,18 @@ pub mod node_views {
     }
 }
 
-pub trait GraphNode : Sized {
-    type Node;
-    fn get(&self) -> &Self::Node;
-    fn get_mut(&mut self) -> &mut Self::Node;
+impl <N, E> NamedNode<N, E> {
+    pub (crate) fn get_view<'id>(&self) -> &node_views::NamedNode<'id, N, E> {
+        unsafe {
+            transmute(&self.internal)
+        }
+    }
 
-    fn meta(&self) -> &MetaData;
-    fn meta_mut(&mut self) -> &mut MetaData;
-
-    fn traverse(&self, cleanup : &mut CleanupState<Self>);
-
-    fn from_data(data : Self::Node) -> Self;
+    pub (crate) fn get_view_mut<'id>(&mut self) -> &mut node_views::NamedNode<'id, N, E> {
+        unsafe {
+            transmute(&mut self.internal)
+        }
+    }
 }
 
 impl <N, E> GraphNode for NamedNode<N, E> {
@@ -93,11 +105,7 @@ pub unsafe trait RootCollection : Default {
     type NodeType : GraphNode;
     fn traverse(this : &Self, cleanup : &mut CleanupState<Self::NodeType>);
 }
-/*
-pub trait KeylessRoot<'id> : RootCollection {
-    fn push(&mut self, GraphPtr<'id, Self::NodeType>);
-}
-*/
+
 fn traverse_touch<NodeType : GraphNode>(iter : impl Iterator<Item = *mut NodeType>, cleanup : &mut CleanupState<NodeType>) {
     for i in iter {
         cleanup.touch(i);
@@ -109,7 +117,6 @@ pub type RootNamedSet<'id, T> = HashSet<GraphPtr<'id, T>>;
 pub type RootHashMap<'id, K, T> = HashMap<K, GraphPtr<'id, T>>;
 pub type RootOption<'id, T> = Option<GraphPtr<'id, T>>;
 
-//pub struct NodeVec<NodeType, E>(Vec<(GraphPtr<'static, NodeType>, E)>);
 pub type NodeVec<'id, NodeType, E> = Vec<(GraphPtr<'id, NodeType>, E)>;
 pub type NodeNamedMap<'id, NodeType, E> = HashMap<GraphPtr<'id, NodeType>, E>;
 pub type NodeTreeMap<'id, K, NodeType, E> = BTreeMap<K, (GraphPtr<'id, NodeType>, E)>;

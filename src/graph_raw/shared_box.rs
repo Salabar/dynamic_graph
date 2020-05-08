@@ -1,4 +1,4 @@
-use core::ptr::{NonNull};
+use core::ptr::NonNull;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
