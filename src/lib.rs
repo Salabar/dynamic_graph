@@ -83,7 +83,7 @@ pub enum CleanupStrategy {
     AlwaysPrecise
 }
 
-pub struct AnchorMut<'this, 'id : 'this, T : 'this>
+pub struct AnchorMut<'this, 'id, T : 'this>
 where T : GraphImpl
 {
     parent: &'this mut T,
@@ -102,7 +102,7 @@ where Root : RootCollection<NodeType = NodeType>,
 }
 
 
-impl <'this, 'id: 'this, T : 'this> Drop for AnchorMut<'this, 'id, T>
+impl <'this, 'id, T : 'this> Drop for AnchorMut<'this, 'id, T>
 where T : GraphImpl
 {
     fn drop(&mut self) {
@@ -114,7 +114,7 @@ where T : GraphImpl
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
+impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
 Index<GraphPtr<'id, NamedNode<N, E>>>
 for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 where Root : RootCollection<NodeType = NamedNode<N, E>>
@@ -126,7 +126,7 @@ where Root : RootCollection<NodeType = NamedNode<N, E>>
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
+impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
 IndexMut<GraphPtr<'id, NamedNode<N, E>>>
 for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 where Root : RootCollection<NodeType = NamedNode<N, E>>
@@ -150,7 +150,7 @@ macro_rules! anchor_mut
     };
 }
 
-impl <'this, 'id : 'this, N : 'this, NodeType : 'this, Root : 'this>
+impl <'this, 'id, N : 'this, NodeType : 'this, Root : 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NodeType>>
 where NodeType : GraphNode<Node = N>,
       Root : RootCollection<NodeType = NodeType>
@@ -174,7 +174,7 @@ where NodeType : GraphNode<Node = N>,
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, NodeType : 'this, Root : 'this>
+impl <'this, 'id, N : 'this, NodeType : 'this, Root : 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NodeType>>
 where NodeType : GraphNode<Node = N>,
       Root : RootCollection<NodeType = NodeType>
@@ -213,7 +213,7 @@ where NodeType : GraphNode<Node = N>,
 }
 
 /* TODO in a smarter way
-impl <'this, 'id : 'this, N : 'this, NodeType : 'this>
+impl <'this, 'id, N : 'this, NodeType : 'this>
 AnchorMut<'this, 'id, VecGraph<NodeType>>
 where NodeType : GraphNode<Node = N>
 {
@@ -227,7 +227,7 @@ where NodeType : GraphNode<Node = N>
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, NodeType : 'this>
+impl <'this, 'id, N : 'this, NodeType : 'this>
 AnchorMut<'this, 'id, NamedGraph<NodeType>>
 where NodeType : GraphNode<Node = N>
 {
@@ -241,7 +241,7 @@ where NodeType : GraphNode<Node = N>
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, NodeType : 'this>
+impl <'this, 'id, N : 'this, NodeType : 'this>
 AnchorMut<'this, 'id, OptionGraph<NodeType>>
 where NodeType : GraphNode<Node = N>
 {
@@ -258,7 +258,7 @@ where NodeType : GraphNode<Node = N>
 
 macro_rules! impl_generic_graph_root {
     ($collection:ident, $graph:ident) => {
-        impl <'this, 'id : 'this, N : 'this, NodeType : 'this>
+        impl <'this, 'id, N : 'this, NodeType : 'this>
         AnchorMut<'this, 'id, $graph<NodeType>>
         where NodeType : GraphNode<Node = N>
         {
@@ -287,7 +287,7 @@ impl_generic_graph_root!{RootVec, VecGraph}
 impl_generic_graph_root!{RootNamedSet, NamedGraph}
 impl_generic_graph_root!{RootOption, OptionGraph}
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
+impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 where Root : RootCollection<NodeType = NamedNode<N, E>>
 {
@@ -299,7 +299,7 @@ where Root : RootCollection<NodeType = NamedNode<N, E>>
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this, Root : 'this>
+impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
 where Root : RootCollection<NodeType = NamedNode<N,E>>
 {
@@ -320,7 +320,7 @@ where Root : RootCollection<NodeType = NamedNode<N,E>>
 
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this>
+impl <'this, 'id, N : 'this, E : 'this>
 AnchorMut<'this, 'id, VecGraph<NamedNode<N, E>>>
 {
     /// Returns an iterator over views into nodes attached to the root.
@@ -342,20 +342,20 @@ AnchorMut<'this, 'id, VecGraph<NamedNode<N, E>>>
 }
 
 /// A wrapper over a GraphPtr which provides simplified access to AnchorMut API.
-pub struct CursorMut<'this, 'id : 'this, T : 'this> {
+pub struct CursorMut<'this, 'id, T : 'this> {
     parent : &'this mut GraphRaw<T>,
     current : GraphPtr<'id, T>
 }
 
 /// A wrapper over a GraphPtr which provides simplified access to Anchor API.
-pub struct Cursor<'this, 'id : 'this, T : 'this> {
+pub struct Cursor<'this, 'id, T : 'this> {
     parent : &'this GraphRaw<T>,
     current : GraphPtr<'id, T>
 }
 
 macro_rules! impl_cursor_immutable {
     ($cursor_type:ident) => {
-        impl <'this, 'id : 'this, N : 'this, NodeType : 'this>
+        impl <'this, 'id, N : 'this, NodeType : 'this>
         $cursor_type<'this, 'id, NodeType>
         where NodeType : GraphNode<Node = N>
         {
@@ -378,7 +378,7 @@ macro_rules! impl_cursor_immutable {
             }
         }
         
-        impl <'this, 'id : 'this, N : 'this, E : 'this>
+        impl <'this, 'id, N : 'this, E : 'this>
         $cursor_type<'this, 'id, NamedNode<N, E>>
         {
             /// Returns an iterator over edges and node pointers attached to the current node.
@@ -395,7 +395,7 @@ macro_rules! impl_cursor_immutable {
             }
         }
         
-        impl <'this, 'id : 'this, N : 'this, E : 'this> Deref for $cursor_type<'this, 'id, NamedNode<N, E>>
+        impl <'this, 'id, N : 'this, E : 'this> Deref for $cursor_type<'this, 'id, NamedNode<N, E>>
         {
             type Target = node_views::NamedNode<'id, N, E>;
             fn deref(&self) -> &Self::Target
@@ -409,7 +409,7 @@ macro_rules! impl_cursor_immutable {
 impl_cursor_immutable!{CursorMut}
 impl_cursor_immutable!{Cursor}
 
-impl <'this, 'id : 'this, N : 'this, E : 'this>
+impl <'this, 'id, N : 'this, E : 'this>
 CursorMut<'this, 'id, NamedNode<N, E>>
 {
     /// Returns a mutable iterator over edges and node pointers attached to the current node.
@@ -434,7 +434,7 @@ CursorMut<'this, 'id, NamedNode<N, E>>
     }
 }
 
-impl <'this, 'id : 'this, N : 'this, E : 'this> DerefMut for CursorMut<'this, 'id, NamedNode<N, E>>
+impl <'this, 'id, N : 'this, E : 'this> DerefMut for CursorMut<'this, 'id, NamedNode<N, E>>
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.parent.get_view_mut(self.at())
