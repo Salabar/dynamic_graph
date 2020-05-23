@@ -35,36 +35,123 @@ pub trait GraphNode : Sized {
 
     fn from_data(data : Self::Node) -> Self;
 }
-/// A node type which uses node pointers as keys in the edge collection.
-pub struct NamedNode<N, E> {
-    pub(crate) internal: node_views::NamedNode<'static, N, E>,
-    pub(crate) meta : MetaData,
-}
+
 
 /// Views into nodes allowing direct access to the nodes data and references.
 pub mod node_views {
     use super::*;
-    pub struct NamedNode<'id, N, E> {
-        pub refs : NodeNamedMap<'id, super::NamedNode<N, E>, E>,
+
+    macro_rules! define_node_view {
+        ($NodeType:ident, $Collection:ident) => {
+            pub struct $NodeType<'id, N, E> {
+                pub refs : $Collection<'id, super::$NodeType<N, E>, E>,
+                pub data : N,
+            }
+
+            impl <'id, N, E> $NodeType<'id, N, E> {
+                pub(crate) fn new(data : N) -> Self {
+                    $NodeType { data, refs: $Collection::default() }
+                }
+            }
+        }
+    }
+
+    define_node_view!{VecNode, NodeVec}
+    define_node_view!{NamedNode, NodeNamedMap}
+    define_node_view!{OptionNode, NodeOption}
+
+    pub struct TreeNode<'id, K, N, E> {
+        pub refs : NodeTreeMap<'id, K, super::TreeNode<K, N, E>, E>,
         pub data : N,
+    }
+
+    impl <'id, K : Ord, N, E> TreeNode<'id, K, N, E> {
+        pub(crate) fn new(data : N) -> Self {
+            TreeNode { data, refs: BTreeMap::default() }
+        }
     }
 }
 
-impl <N, E> NamedNode<N, E> {
-    pub (crate) fn get_view<'id>(&self) -> &node_views::NamedNode<'id, N, E> {
+macro_rules! impl_node_type {
+    ($NodeType:ident) => {
+
+        pub struct $NodeType<N, E> {
+            pub(crate) internal: node_views::$NodeType<'static, N, E>,
+            pub(crate) meta : MetaData,
+        }
+
+        impl <N, E> $NodeType<N, E> {
+            pub (crate) fn get_view<'id>(&self) -> &node_views::$NodeType<'id, N, E> {
+                unsafe {
+                    transmute(&self.internal)
+                }
+            }
+
+            pub (crate) fn get_view_mut<'id>(&mut self) -> &mut node_views::$NodeType<'id, N, E> {
+                unsafe {
+                    transmute(&mut self.internal)
+                }
+            }
+        }
+
+        impl <N, E> GraphNode for $NodeType<N, E> {
+            type Node = N;
+
+            fn get(&self) -> &Self::Node
+            {
+                &self.internal.data
+            }
+
+            fn get_mut(&mut self) -> &mut Self::Node
+            {
+                &mut self.internal.data
+            }
+
+            fn meta(&self) -> &MetaData {
+                &self.meta
+            }
+            
+            fn meta_mut(&mut self) -> &mut MetaData {
+                &mut self.meta
+            }
+
+            fn traverse(&self, cleanup : &mut CleanupState<Self>) {
+                NodeCollection::traverse(&self.internal.refs, cleanup);
+            }
+
+            fn from_data(data : Self::Node) -> Self
+            {
+                let meta = MetaData { cleanup_gen : CleanupGen::Even, store_index : 0 };
+                Self { internal : node_views::$NodeType::new(data), meta }
+            }
+        }
+    }
+}
+
+impl_node_type!{VecNode}
+impl_node_type!{NamedNode}
+impl_node_type!{OptionNode}
+
+pub struct TreeNode<K, N, E> {
+    pub(crate) internal: node_views::TreeNode<'static, K, N, E>,
+    pub(crate) meta : MetaData,
+}
+
+impl <K, N, E> TreeNode<K, N, E> {
+    pub (crate) fn get_view<'id>(&self) -> &node_views::TreeNode<'id, K, N, E> {
         unsafe {
             transmute(&self.internal)
         }
     }
 
-    pub (crate) fn get_view_mut<'id>(&mut self) -> &mut node_views::NamedNode<'id, N, E> {
+    pub (crate) fn get_view_mut<'id>(&mut self) -> &mut node_views::TreeNode<'id, K, N, E> {
         unsafe {
             transmute(&mut self.internal)
         }
     }
 }
 
-impl <N, E> GraphNode for NamedNode<N, E> {
+impl <K : Ord, N, E> GraphNode for TreeNode<K, N, E> {
     type Node = N;
 
     fn get(&self) -> &Self::Node
@@ -92,18 +179,16 @@ impl <N, E> GraphNode for NamedNode<N, E> {
     fn from_data(data : Self::Node) -> Self
     {
         let meta = MetaData { cleanup_gen : CleanupGen::Even, store_index : 0 };
-        Self { internal : node_views::NamedNode { refs : HashMap::new(), data }, meta }
+        Self { internal : node_views::TreeNode::new(data), meta }
     }
 }
 
-pub unsafe trait NodeCollection : Default {
-    type NodeType : GraphNode;
-    fn traverse(this : &Self, cleanup : &mut CleanupState<Self::NodeType>);
+pub unsafe trait NodeCollection<'id, NodeType : GraphNode> : Default {
+    fn traverse(this : &Self, cleanup : &mut CleanupState<NodeType>);
 }
 
-pub unsafe trait RootCollection : Default {
-    type NodeType : GraphNode;
-    fn traverse(this : &Self, cleanup : &mut CleanupState<Self::NodeType>);
+pub unsafe trait RootCollection<'id, NodeType : GraphNode> : Default {
+    fn traverse(this : &Self, cleanup : &mut CleanupState<NodeType>);
 }
 
 fn traverse_touch<NodeType : GraphNode>(iter : impl Iterator<Item = *mut NodeType>, cleanup : &mut CleanupState<NodeType>) {
@@ -114,20 +199,19 @@ fn traverse_touch<NodeType : GraphNode>(iter : impl Iterator<Item = *mut NodeTyp
 
 pub type RootVec<'id, T> = Vec<GraphPtr<'id, T>>;
 pub type RootNamedSet<'id, T> = HashSet<GraphPtr<'id, T>>;
-pub type RootHashMap<'id, K, T> = HashMap<K, GraphPtr<'id, T>>;
 pub type RootOption<'id, T> = Option<GraphPtr<'id, T>>;
+pub type RootHashMap<'id, K, T> = HashMap<K, GraphPtr<'id, T>>;
 
 pub type NodeVec<'id, NodeType, E> = Vec<(GraphPtr<'id, NodeType>, E)>;
 pub type NodeNamedMap<'id, NodeType, E> = HashMap<GraphPtr<'id, NodeType>, E>;
-pub type NodeTreeMap<'id, K, NodeType, E> = BTreeMap<K, (GraphPtr<'id, NodeType>, E)>;
 pub type NodeOption<'id, NodeType, E> = Option<(GraphPtr<'id, NodeType>, E)>;
+pub type NodeTreeMap<'id, K, NodeType, E> = BTreeMap<K, (GraphPtr<'id, NodeType>, E)>;
 
 macro_rules! impl_root_collection {
     ($collection:ident) => {
-        unsafe impl <'id, NodeType> RootCollection for $collection<'id, NodeType>
+        unsafe impl <'id, NodeType> RootCollection<'id, NodeType> for $collection<'id, NodeType>
         where NodeType : GraphNode
         {
-            type NodeType = NodeType;
             fn traverse(this : &Self, cleanup : &mut CleanupState<NodeType>) {
                 traverse_touch(this.iter().map(|x| x.as_mut()), cleanup);
             }
@@ -135,11 +219,10 @@ macro_rules! impl_root_collection {
     }
 }
 
-unsafe impl <'id, K, NodeType> RootCollection for RootHashMap<'id, K, NodeType>
+unsafe impl <'id, K, NodeType> RootCollection<'id, NodeType> for RootHashMap<'id, K, NodeType>
 where NodeType : GraphNode,
       K : Hash + Eq
 {
-    type NodeType = NodeType;
     fn traverse(this : &Self, cleanup : &mut CleanupState<NodeType>) {
         traverse_touch(this.values().map(|x| x.as_mut()), cleanup);
     }
@@ -151,10 +234,9 @@ impl_root_collection!{RootOption}
 
 macro_rules! impl_node_collection {
     ($collection:ident) => {
-        unsafe impl <'id, NodeType, E> NodeCollection for $collection<'id, NodeType, E>
+        unsafe impl <'id, NodeType, E> NodeCollection<'id, NodeType> for $collection<'id, NodeType, E>
         where NodeType : GraphNode
         {
-            type NodeType = NodeType;
             fn traverse(this : &Self, cleanup : &mut CleanupState<NodeType>) {
                 traverse_touch(this.iter().map(|x| x.0.as_mut()), cleanup);
             }
@@ -166,11 +248,10 @@ impl_node_collection!{NodeVec}
 impl_node_collection!{NodeNamedMap}
 impl_node_collection!{NodeOption}
 
-unsafe impl <'id, K, NodeType, E> NodeCollection for NodeTreeMap<'id, K, NodeType, E>
+unsafe impl <'id, K, NodeType, E> NodeCollection<'id, NodeType> for NodeTreeMap<'id, K, NodeType, E>
 where NodeType : GraphNode,
       K : Ord
 {
-    type NodeType = NodeType;
     fn traverse(this : &Self, cleanup : &mut CleanupState<NodeType>) {
         traverse_touch(this.values().map(|x| x.0.as_mut()), cleanup);
     }

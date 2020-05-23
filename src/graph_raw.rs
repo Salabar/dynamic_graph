@@ -158,7 +158,7 @@ where NodeType : GraphNode<Node = N>
         })
     }
 
-    pub(crate) fn cleanup_precise(&mut self, root : &impl RootCollection<NodeType = NodeType>)
+    pub(crate) fn cleanup_precise<'id>(&mut self, root : &impl RootCollection<'id, NodeType>)
     {
         self.cleanup_gen.flip();
         let mut state = CleanupState { parent : self, index : 0, queue : VecDeque::new() };
@@ -237,6 +237,12 @@ impl <N, E> GraphRaw<NamedNode<N, E>>
             None
         }
     }
+}
+
+
+
+impl <N, E> GraphRaw<NamedNode<N, E>>
+{
 
     pub(crate) fn get_view<'id>(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &node_views::NamedNode<'id, N, E>
     {

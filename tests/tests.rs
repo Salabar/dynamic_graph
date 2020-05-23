@@ -313,21 +313,3 @@ fn test_max_flow() {
     }
     assert_eq!(edmonds_karp(&mut graph), 23);
 }
-
-
-
-#[test]
-fn test_owner() {
-    let mut graph = VecGraph::<NamedNode<i32,i32>>::new();
-    {
-        //Thomas Cormen, Introduction to Algorithms 2e, pic. 26.5
-        anchor_mut!(graph, AlwaysPrecise);
-        let source = graph.spawn(1);
-
-        let c = graph.cursor_mut(source);
-        //let mut it1 = c.edges_mut();
-        let c = graph.cursor_mut(source);
-
-//        it1.next();
-    }
-}
