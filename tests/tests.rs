@@ -41,10 +41,9 @@ fn breadth_first_search(graph : &mut VecGraph<NamedNode<BfsNode, ()>>) {
 
 #[test]
 fn test_bfs() {
-    let mut graph = VecGraph::new();
+    let mut graph = VecGraph::<NamedNode<_, _>>::new();
     {
         anchor_mut!(graph, Never);
-        
         let mut vec = Vec::new();
         //Thomas Cormen, Introduction to Algorithms 2e, pic. 22.3
         for i in 0..8 {
@@ -138,7 +137,7 @@ fn print_bf_path<'a>(graph : &AnchorMut<'a, 'a, VecGraph<BFNode>>,
 
 #[test]
 fn shortest_path_test() {
-    let mut graph = VecGraph::new(); 
+    let mut graph = VecGraph::<NamedNode<_, _>>::new(); 
     {
         anchor_mut!(graph, Never);
         //Thomas Cormen, Introduction to Algorithms 2e, pic. 24.6
@@ -200,10 +199,10 @@ struct FlowEdge {
 type FlowNode = NamedNode<(), FlowEdge>;
 type FlowRef<'id> = GraphPtr<'id, FlowNode>;
 
-fn find_path<'id>(graph : &AnchorMut<'id, 'id, VecGraph<FlowNode>>)
+fn find_path<'id>(graph : &AnchorMut<'_, 'id, VecGraph<FlowNode>>)
                -> Option<HashMap<FlowRef<'id>, (FlowRef<'id>, i32)>>
 {
-    let mut path = HashMap::new();
+    let mut path  = HashMap::new();
     let mut queue = VecDeque::new();
 
     let root = graph.root();
@@ -268,7 +267,7 @@ fn edmonds_karp(graph : &mut VecGraph<FlowNode>) -> i32 {
 
 #[test]
 fn test_max_flow() {
-    let mut graph = VecGraph::new();
+    let mut graph = VecGraph::<NamedNode<_, _>>::new();
     {
         //Thomas Cormen, Introduction to Algorithms 2e, pic. 26.5
         anchor_mut!(graph, AlwaysPrecise);

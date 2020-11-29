@@ -1,3 +1,5 @@
+#![allow(unused_unsafe)]
+
 pub mod graph_ptr;
 pub use crate::graph_ptr::*;
 
@@ -101,7 +103,6 @@ where Root : RootCollection<'static, NodeType>,
     }
 }
 
-
 impl <'this, 'id, T : 'this> Drop for AnchorMut<'this, 'id, T>
 where T : GraphImpl
 {
@@ -114,41 +115,67 @@ where T : GraphImpl
     }
 }
 
-impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
-Index<GraphPtr<'id, NamedNode<N, E>>>
-for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
-where Root : RootCollection<'static, NamedNode<N, E>>
-{
-    type Output = node_views::NamedNode<'id, N, E>;
-    fn index(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &Self::Output
-    {
-        self.internal().get_view(dst)
+macro_rules! impl_node_index {
+    ($NodeType:ident) => {
+        impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
+        Index<GraphPtr<'id, $NodeType<N, E>>>
+        for AnchorMut<'this, 'id, GenericGraph<Root, $NodeType<N, E>>>
+        where Root : RootCollection<'static, $NodeType<N, E>>
+        {
+            type Output = node_views::$NodeType<'id, N, E>;
+            fn index(&self, dst : GraphPtr<'id, $NodeType<N, E>>) -> &Self::Output
+            {
+                self.internal().get_view(dst)
+            }
+        }
+
+        impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
+        IndexMut<GraphPtr<'id, $NodeType<N, E>>>
+        for AnchorMut<'this, 'id, GenericGraph<Root, $NodeType<N, E>>>
+        where Root : RootCollection<'static, $NodeType<N, E>>
+        {
+            fn index_mut(&mut self, dst : GraphPtr<'id, $NodeType<N, E>>) -> &mut Self::Output {
+                self.internal_mut().get_view_mut(dst)
+            }
+        }
+
+        impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
+        AnchorMut<'this, 'id, GenericGraph<Root, $NodeType<N, E>>>
+        where Root : RootCollection<'static, $NodeType<N, E>>
+        {
+            /// Returns an iterator over edges attached to `src` node.
+            pub fn edges(&self, src : GraphPtr<'id, $NodeType<N, E>>) ->
+                impl Iterator<Item = GraphItem<Edge<&'_ N, &'_ E>, GraphPtr<'id, $NodeType<N, E>>>>
+            {
+                self.internal().iter(src)
+            }
+        }
+        
+        impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
+        AnchorMut<'this, 'id, GenericGraph<Root, $NodeType<N, E>>>
+        where Root : RootCollection<'static, $NodeType<N,E>>
+        {
+            /// Returns a mutable iterator over edges attached to `src` node.
+            pub fn edges_mut(&mut self, src : GraphPtr<'id, $NodeType<N, E>>) ->
+                impl Iterator<Item = GraphItem<Edge<&'_ mut N, &'_ mut E>, GraphPtr<'id, $NodeType<N, E>>>>
+            {
+                self.internal_mut().iter_mut(src)
+            }
+        
+            /// Provides direct mutable direct access to two different nodes `src` and `dst`. Returns or None if `src` is the same as `dst`.
+            pub fn bridge(&mut self, src : GraphPtr<'id, $NodeType<N, E>>,
+                                     dst : GraphPtr<'id, $NodeType<N, E>>) ->
+                Option<(&'_ mut node_views::$NodeType<'id, N, E>, &'_ mut node_views::$NodeType<'id, N, E>)>
+            {
+                self.internal_mut().bridge(src, dst)
+            }
+        }
     }
 }
 
-impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
-IndexMut<GraphPtr<'id, NamedNode<N, E>>>
-for AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
-where Root : RootCollection<'static, NamedNode<N, E>>
-{
-    fn index_mut(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &mut Self::Output {
-        self.internal_mut().get_view_mut(dst)
-    }
-}
-
-#[macro_export]
-/// Creates an AnchorMut using selected cleanup strategy.
-macro_rules! anchor_mut
-{
-    ($name:ident, $strategy:tt) => {
-        make_guard!(g);
-        let mut $name = unsafe { $name.anchor_mut(Id::from(g), $strategy) };
-    };
-    ($name:ident, $parent:tt, $strategy:tt) => {
-        make_guard!(g);
-        let mut $name = unsafe { $parent.anchor_mut(Id::from(g), $strategy) };
-    };
-}
+impl_node_index!{NamedNode}
+impl_node_index!{OptionNode}
+impl_node_index!{VecNode}
 
 impl <'this, 'id, N : 'this, NodeType : 'this, Root : 'this>
 AnchorMut<'this, 'id, GenericGraph<Root, NodeType>>
@@ -212,134 +239,38 @@ where NodeType : GraphNode<Node = N>,
     }
 }
 
-/* TODO in a smarter way
-impl <'this, 'id, N : 'this, NodeType : 'this>
-AnchorMut<'this, 'id, VecGraph<NodeType>>
-where NodeType : GraphNode<Node = N>
-{
-    /// Allocates a new node and returns the pointer. Attaches the node to the root by Vec::push.
-    pub fn spawn_attached(&mut self, data : N) -> GraphPtr<'id, NodeType>
-    {
-        let res = self.spawn(data);
-        let a = res.into_static();
-        self.parent.root.push(a);
-        res
-    }
-}
-
-impl <'this, 'id, N : 'this, NodeType : 'this>
-AnchorMut<'this, 'id, NamedGraph<NodeType>>
-where NodeType : GraphNode<Node = N>
-{
-    /// Allocates a new node and returns the pointer. Attaches the node to the root by HashSet::insert.
-    pub fn spawn_attached(&mut self, data : N) -> GraphPtr<'id, NodeType>
-    {
-        let res = self.spawn(data);
-        let a = res.into_static();
-        self.parent.root.insert(a);
-        res
-    }
-}
-
-impl <'this, 'id, N : 'this, NodeType : 'this>
-AnchorMut<'this, 'id, OptionGraph<NodeType>>
-where NodeType : GraphNode<Node = N>
-{
-    /// Allocates a new node and returns the pointer. Attaches the node to the root by assignment.
-    pub fn spawn_attached(&mut self, data : N) -> GraphPtr<'id, NodeType>
-    {
-        let res = self.spawn(data);
-        let a = res.into_static();
-        self.parent.root = Some(a);
-        res
-    }
-}
-*/
-
-macro_rules! impl_generic_graph_root {
-    ($collection:ident, $graph:ident) => {
+macro_rules! impl_root_iter {
+    ($root_type:ident) => {
         impl <'this, 'id, N : 'this, NodeType : 'this>
-        AnchorMut<'this, 'id, $graph<NodeType>>
+        AnchorMut<'this, 'id, $root_type<NodeType>>
         where NodeType : GraphNode<Node = N>
         {
-            /// Provides direct access to the collection of the root.
-            pub fn root(&self) -> & $collection<'id, NodeType>
+            /// Returns an iterator over data and pointers to nodes attached to the root.
+            pub fn iter(&self) -> impl Iterator<Item = GraphItem<&'_ N, GraphPtr<'id, NodeType>>>
             {
-                //this transmute only affects lifetime parameter
-                unsafe {
-                    transmute(&self.parent.root)
-                }
+                self.root().iter().map(move |x| {
+                    let p = x.as_ptr();
+                    let values = unsafe { (*p).get() };
+                    GraphItem { values, ptr : *x }
+                })
             }
 
-            /// Provides direct mutable access to the collection of the root.
-            pub fn root_mut(&mut self) -> &mut $collection<'id, NodeType>
+            /// Returns a mutable iterator over data and pointers to nodes attached to the root.
+            pub fn iter_mut(&mut self) -> impl Iterator<Item = GraphItem<&'_ mut N, GraphPtr<'id, NodeType>>>
             {
-                //this transmute only affects lifetime parameter
-                unsafe {
-                    transmute(&mut self.parent.root)
-                }
+                self.root_mut().iter().map(move |x| {
+                    let p = x.as_mut();
+                    let values = unsafe { (*p).get_mut() };
+                    GraphItem { values, ptr : *x }
+                })
             }
         }
     }
 }
 
-impl_generic_graph_root!{RootVec, VecGraph}
-impl_generic_graph_root!{RootNamedSet, NamedGraph}
-impl_generic_graph_root!{RootOption, OptionGraph}
-
-impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
-AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
-where Root : RootCollection<'static, NamedNode<N, E>>
-{
-    /// Returns an iterator over edges attached to `src` node.
-    pub fn edges(&self, src : GraphPtr<'id, NamedNode<N, E>>) ->
-        impl Iterator<Item = GraphIterRes<Edge<&'_ N, &'_ E>, GraphPtr<'id, NamedNode<N, E>>>>
-    {
-        self.internal().iter(src)
-    }
-}
-
-impl <'this, 'id, N : 'this, E : 'this, Root : 'this>
-AnchorMut<'this, 'id, GenericGraph<Root, NamedNode<N, E>>>
-where Root : RootCollection<'static, NamedNode<N,E>>
-{
-    /// Returns a mutable iterator over edges attached to `src` node.
-    pub fn edges_mut(&mut self, src : GraphPtr<'id, NamedNode<N, E>>) ->
-        impl Iterator<Item = GraphIterRes<Edge<&'_ mut N, &'_ mut E>, GraphPtr<'id, NamedNode<N, E>>>>
-    {
-        self.internal_mut().iter_mut(src)
-    }
-
-    /// Provides direct mutable direct access to two different nodes `src` and `dst`. Returns or None if `src` is the same as `dst`.
-    pub fn bridge(&mut self, src : GraphPtr<'id, NamedNode<N, E>>,
-                             dst : GraphPtr<'id, NamedNode<N, E>>) ->
-        Option<(&'_ mut node_views::NamedNode<'id, N, E>, &'_ mut node_views::NamedNode<'id, N, E>)>
-    {
-        self.internal_mut().bridge(src, dst)
-    }
-
-}
-
-impl <'this, 'id, N : 'this, E : 'this>
-AnchorMut<'this, 'id, VecGraph<NamedNode<N, E>>>
-{
-    /// Returns an iterator over views into nodes attached to the root.
-    pub fn iter(&self) -> impl Iterator<Item = &'_ node_views::NamedNode<'id, N, E>>
-    {
-        self.root().iter().map(move |x| &self[*x])
-    }
-
-    /// Returns an iterator over mutable views into nodes attached to the root.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &'_ mut node_views::NamedNode<'id, N, E>>
-    {
-        //GraphRaw.rs get_view_mut
-        self.root_mut().iter_mut().map(move |x| {
-            unsafe {
-                (*x.as_mut()).get_view_mut()
-            }
-        })
-    }
-}
+impl_root_iter!{VecGraph}
+impl_root_iter!{NamedGraph}
+impl_root_iter!{OptionGraph}
 
 /// A wrapper over a GraphPtr which provides simplified access to AnchorMut API.
 pub struct CursorMut<'this, 'id, T : 'this> {
@@ -380,63 +311,173 @@ macro_rules! impl_cursor_immutable {
         
         impl <'this, 'id, N : 'this, E : 'this>
         $cursor_type<'this, 'id, NamedNode<N, E>>
-        {
-            /// Returns an iterator over edges and node pointers attached to the current node.
-            pub fn edges(&self) ->
-                impl Iterator<Item = GraphIterRes<Edge<&'_ N, &'_ E>, GraphPtr<'id, NamedNode<N, E>>>>
-            {
-                self.parent.iter(self.at())
-            }
-
+        {    
             /// Returns Some if `dst` is attached to the current node and None otherwise.
             pub fn get_edge(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ N, &'_ E>>
             {
                 self.parent.get_edge(self.at(), dst)
             }
         }
-        
-        impl <'this, 'id, N : 'this, E : 'this> Deref for $cursor_type<'this, 'id, NamedNode<N, E>>
+
+        impl <'this, 'id, N : 'this, E : 'this>
+        $cursor_type<'this, 'id, VecNode<N, E>>
+        {    
+            /// Returns Some if `dst` is attached to the current node and None otherwise.
+            pub fn get_edge(&self, dst : usize) -> Option<Edge<&'_ N, &'_ E>>
+            {
+                self.parent.get_edge(self.at(), dst)
+            }
+        }
+
+        impl <'this, 'id, N : 'this, E : 'this>
+        $cursor_type<'this, 'id, OptionNode<N, E>>
+        {    
+            /// Returns Some if a node is attached to the current node and None otherwise.
+            pub fn get_edge(&self) -> Option<Edge<&'_ N, &'_ E>>
+            {
+                self.parent.get_edge(self.at())
+            }
+        }
+    };
+    ($cursor_type:ident, $node_type:ident) => {
+        impl <'this, 'id, N : 'this, E : 'this>
+        $cursor_type<'this, 'id, $node_type<N, E>>
         {
-            type Target = node_views::NamedNode<'id, N, E>;
+            /// Returns an iterator over edges and node pointers attached to the current node.
+            pub fn edges(&self) ->
+                impl Iterator<Item = GraphItem<Edge<&'_ N, &'_ E>, GraphPtr<'id, $node_type<N, E>>>>
+            {
+                self.parent.iter(self.at())
+            }
+        }
+        
+        impl <'this, 'id, N : 'this, E : 'this> Deref for $cursor_type<'this, 'id, $node_type<N, E>>
+        {
+            type Target = node_views::$node_type<'id, N, E>;
             fn deref(&self) -> &Self::Target
             {
                 self.parent.get_view(self.at())
             }
         }
-    }
+    };
 }
 
 impl_cursor_immutable!{CursorMut}
 impl_cursor_immutable!{Cursor}
 
+impl_cursor_immutable!{CursorMut, NamedNode}
+impl_cursor_immutable!{Cursor, NamedNode}
+impl_cursor_immutable!{CursorMut, VecNode}
+impl_cursor_immutable!{Cursor, VecNode}
+impl_cursor_immutable!{CursorMut, OptionNode}
+impl_cursor_immutable!{Cursor, OptionNode}
+
 impl <'this, 'id, N : 'this, E : 'this>
 CursorMut<'this, 'id, NamedNode<N, E>>
-{
-    /// Returns a mutable iterator over edges and node pointers attached to the current node.
-    pub fn edges_mut(&mut self) ->
-        impl Iterator<Item = GraphIterRes<Edge<&'_ mut  N, &'_ mut E>, GraphPtr<'id, NamedNode<N, E>>>>
-    {
-        self.parent.iter_mut(self.at())
-    }
-
+{    
     /// Returns Some if `dst` is attached to the current node and None otherwise.
-    fn get_edge_mut(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ mut N, &'_ mut E>>
+    pub fn get_edge_mut(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ mut N, &'_ mut E>>
     {
         self.parent.get_edge_mut(self.at(), dst)
     }
+}
 
-    /// Provides direct mutable access to current and `dst` nodes or or None if current is the same as `dst`.
-    /// Returns mutable views into the current and `dst` nodes or None if current is the same as `dst`.
-    pub fn bridge(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) ->
-        Option<(&'_ mut node_views::NamedNode<'id, N, E>, &'_ mut node_views::NamedNode<'id, N, E>)>
+impl <'this, 'id, N : 'this, E : 'this>
+CursorMut<'this, 'id, VecNode<N, E>>
+{    
+    /// Returns Some if `dst` is attached to the current node and None otherwise.
+    pub fn get_edge_mut(&mut self, dst : usize) -> Option<Edge<&'_ mut N, &'_ mut E>>
     {
-        self.parent.bridge(self.at(), dst)
+        self.parent.get_edge_mut(self.at(), dst)
     }
 }
 
-impl <'this, 'id, N : 'this, E : 'this> DerefMut for CursorMut<'this, 'id, NamedNode<N, E>>
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.parent.get_view_mut(self.at())
+impl <'this, 'id, N : 'this, E : 'this>
+CursorMut<'this, 'id, OptionNode<N, E>>
+{    
+    /// Returns Some if a node is attached to the current node and None otherwise.
+    pub fn get_edge_mut(&mut self) -> Option<Edge<&'_ mut N, &'_ mut E>>
+    {
+        self.parent.get_edge_mut(self.at())
     }
+}
+
+macro_rules! impl_cursor_mut {
+    ($node_type:ident) => {
+        impl <'this, 'id, N : 'this, E : 'this>
+        CursorMut<'this, 'id, $node_type<N, E>>
+        {
+            /// Returns a mutable iterator over edges and node pointers attached to the current node.
+            pub fn edges_mut(&mut self) ->
+                impl Iterator<Item = GraphItem<Edge<&'_ mut  N, &'_ mut E>, GraphPtr<'id, $node_type<N, E>>>>
+            {
+                self.parent.iter_mut(self.at())
+            }
+
+            /// Provides direct mutable access to current and `dst` nodes or or None if current is the same as `dst`.
+            /// Returns mutable views into the current and `dst` nodes or None if current is the same as `dst`.
+            pub fn bridge(&mut self, dst : GraphPtr<'id, $node_type<N, E>>) ->
+                Option<(&'_ mut node_views::$node_type<'id, N, E>, &'_ mut node_views::$node_type<'id, N, E>)>
+            {
+                self.parent.bridge(self.at(), dst)
+            }
+        }
+
+        impl <'this, 'id, N : 'this, E : 'this> DerefMut for CursorMut<'this, 'id, $node_type<N, E>>
+        {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                self.parent.get_view_mut(self.at())
+            }
+        }
+    }
+}
+
+impl_cursor_mut!{NamedNode}
+impl_cursor_mut!{VecNode}
+impl_cursor_mut!{OptionNode}
+
+
+macro_rules! impl_generic_graph_root {
+    ($collection:ident, $graph:ident) => {
+        impl <'this, 'id, N : 'this, NodeType : 'this>
+        AnchorMut<'this, 'id, $graph<NodeType>>
+        where NodeType : GraphNode<Node = N>
+        {
+            /// Provides direct access to the collection of the root.
+            pub fn root(&self) -> &$collection<'id, NodeType>
+            {
+                //this transmute only affects lifetime parameter
+                unsafe {
+                    transmute(&self.parent.root)
+                }
+            }
+
+            /// Provides direct mutable access to the collection of the root.
+            pub fn root_mut(&mut self) -> &mut $collection<'id, NodeType>
+            {
+                //this transmute only affects lifetime parameter
+                unsafe {
+                    transmute(&mut self.parent.root)
+                }
+            }
+        }
+    }
+}
+
+impl_generic_graph_root!{RootVec, VecGraph}
+impl_generic_graph_root!{RootNamedSet, NamedGraph}
+impl_generic_graph_root!{RootOption, OptionGraph}
+
+#[macro_export]
+/// Creates an AnchorMut using selected cleanup strategy.
+macro_rules! anchor_mut
+{
+    ($name:ident, $strategy:tt) => {
+        make_guard!(g);
+        let mut $name = unsafe { $name.anchor_mut(Id::from(g), $strategy)   };
+    };
+    ($name:ident, $parent:tt, $strategy:tt) => {
+        make_guard!(g);
+        let mut $name = unsafe { $parent.anchor_mut(Id::from(g), $strategy) };
+    };
 }

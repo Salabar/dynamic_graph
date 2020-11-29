@@ -10,6 +10,6 @@ readme = "README.md"
 
 [dependencies]
 generativity = "1.0.0"
-
+unsafer = "0.1.0"
 [profile.dev]
 opt-level = 0

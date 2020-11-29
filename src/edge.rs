@@ -1,12 +1,5 @@
 use core::hint::unreachable_unchecked;
 
-pub struct GraphIterRes<E, T> {
-    /// Edge data.
-    pub values : E,
-    /// A pointer to the node.
-    pub ptr : T,
-}
-
 pub struct EdgeBoth<N, E> {
     /// Value from the source node.
     pub this : N,

@@ -1,9 +1,19 @@
+#![allow(unused_braces)]
+
 use super::*;
 
-pub mod shared_box;
-use crate::shared_box::*;
+use unsafer::shared_box::*;
+use unsafer::pointers::*;
+use unsafer::assume::*;
 
 use std::collections::VecDeque;
+
+pub struct GraphItem<E, T> {
+    /// Edge data.
+    pub values : E,
+    /// A pointer to the node.
+    pub ptr : T,
+}
 
 pub (crate) struct GraphRaw<T> {
     pub(crate) data : Vec<SharedBox<T>>,
@@ -17,7 +27,7 @@ pub struct CleanupState<'this, T>
     index : usize
 }
 
-impl <NodeType> CleanupState<'_, NodeType>
+impl <'this, NodeType : 'this> CleanupState<'this, NodeType>
 where NodeType : GraphNode
 {
     pub fn touch(&mut self, node : *mut NodeType) {
@@ -46,11 +56,16 @@ where NodeType : GraphNode<Node = N>
 {
     pub(crate) fn spawn_detached(&mut self, data : N) -> *const NodeType
     {
-        let mut node = SharedBox::new(NodeType::from_data(data));
-        node.meta_mut().store_index = self.data.len();
-        node.meta_mut().cleanup_gen = self.cleanup_gen;
+        let node = Box::new(NodeType::from_data(data));
+        let mut node : SharedBox<_> = node.into();
+        let ptr = node.as_ptr();
 
-        let ptr = SharedBox::as_ptr(&node);
+        unsafe {
+            let mut bind = Bind::new();
+            let r = bind.get_mut(ptr);
+            r.meta_mut().store_index = self.data.len();
+            r.meta_mut().cleanup_gen = self.cleanup_gen;
+        }
 
         self.data.push(node);
         ptr
@@ -59,26 +74,31 @@ where NodeType : GraphNode<Node = N>
     // Moves internal pointer to the start of the storage, requires item to be a valid pointer
     // This function is used in the preparatory stage of cleanup before any node is dropped therefore (Q W E)
     // apply.
-    pub(crate) fn touch(&mut self, index : usize, item : *mut NodeType) -> bool
+    pub(crate) fn touch(&mut self, frontier : usize, item : *mut NodeType) -> bool
     {
-        let item_index = {
-            let s = unsafe { (*item).meta_mut() };
-            if s.cleanup_gen == self.cleanup_gen {
-                return false;
-            }
-            s.cleanup_gen = self.cleanup_gen;
-            s.store_index
+        let mut bind = Bind::new();
+        
+        let s =  unsafe {
+            bind.get_mut(item).meta_mut()
         };
 
-        unsafe {
-            //previous dereferencing already dropped
-            (*item).meta_mut().store_index = index;
+        if s.cleanup_gen != self.cleanup_gen {
+
+            s.cleanup_gen = self.cleanup_gen;
+            let item_index = s.store_index;
+            s.store_index = frontier;
+
+            let old_frontier = unsafe {
+                assume(|| frontier < self.data.len() && item_index < self.data.len());
+                bind.get_mut(self.data[frontier].as_ptr()).meta_mut()
+            };
+            old_frontier.store_index = item_index;
+
+            self.data.swap(item_index, frontier);
+            true
+        } else {
+            false
         }
-
-        self.data[index].meta_mut().store_index = item_index;
-        self.data.swap(item_index, index);
-
-        true
     }
 
     pub(crate) fn get<'id>(&self, item : GraphPtr<'id, NodeType>) -> &N
@@ -100,60 +120,94 @@ where NodeType : GraphNode<Node = N>
     pub(crate) unsafe fn kill(&mut self, item : *const NodeType)
     {
         // (E)
-        let store_index = {
-            (*item).meta().store_index
+        let mut bind = Bind::new();
+    
+        let victim = unsafe {
+            bind.get(item)
         };
-        
-        if self.data.len() > 0 && store_index < self.data.len() {
-            self.data.last_mut().unwrap().meta_mut().store_index = store_index;
-            self.data.swap_remove(store_index);
-        } else { 
-            unreachable!()
-            //storeIndex always points to the current position in the Vec
-            //unreachable_unchecked()
+
+        let item_index = victim.meta().store_index;
+
+        unsafe {
+            //item_index always points to the current position in the Vec
+            assume(|| item_index < self.data.len());
+        }
+
+        let last = unsafe {
+            bind.get_mut(self.data.last_mut().assume_some().as_ptr())
+        };
+
+        last.meta_mut().store_index = item_index;
+        self.data.swap_remove(item_index);
+    }
+
+    pub(crate) fn get_edge_raw<'id, E : 'a>(&'a self, src : GraphPtr<'id, NodeType>, dst : GraphPtr<'id, NodeType>, edge : &'a E)
+               -> Edge<&'a N, &'a E>
+    {
+        let this = self.get(src);
+        if src == dst {
+            Loop(EdgeLoop { this, edge })
+        } else {
+            let that = unsafe { (*dst.as_ptr()).get() };
+            Both(EdgeBoth { this, that, edge })
+        }
+    }
+
+    pub(crate) fn get_edge_mut_raw<'id, E : 'a>(&'a mut self, src : GraphPtr<'id, NodeType>, dst : GraphPtr<'id, NodeType>, edge : &'a mut E)
+               -> Edge<&'a mut N, &'a mut E>
+    {
+        let this = self.get_mut(src);
+        if src == dst {
+            Loop(EdgeLoop { this, edge })
+        } else {
+            //Aliasing checked
+            let that = unsafe { (*dst.as_mut()).get_mut() };
+            Both(EdgeBoth { this, that, edge })
         }
     }
 
     pub(crate) fn iter_from_raw<'id : 'a, Iter : 'a, E : 'a>(&'a self, src : GraphPtr<'id, NodeType>, iter : Iter)
-        -> impl Iterator<Item = GraphIterRes<Edge<&'a N, &'a E>, GraphPtr<'id, NodeType>>>
+               -> impl Iterator<Item = GraphItem<Edge<&'a N, &'a E>, GraphPtr<'id, NodeType>>>
     where Iter : Iterator<Item = (*const NodeType, &'a E)>
     {
         let g = src._guard;
         let current = src.as_ptr();
         iter.map(move |x| {
-            let ptr = x.0;
+            let p = x.0;
+            let edge = x.1;
             //(W)
-            let p =  unsafe { GraphPtr::from_ptr(ptr, g) };
-            let that = unsafe { (*ptr).get() };
+            let ptr =  unsafe { GraphPtr::from_ptr(p, g) };
+            let that = unsafe { (*p).get() };
         
-            if current == ptr {
-                GraphIterRes { values : Loop(EdgeLoop { this : that, edge : x.1}), ptr : p }
+            if current == p {
+                GraphItem { values : Loop(EdgeLoop { this : that, edge }), ptr }
             } else {
                 let this = unsafe { (*current).get() };
-                GraphIterRes { values : Both(EdgeBoth { this, that, edge : x.1 }), ptr : p }
+                GraphItem { values : Both(EdgeBoth { this, that, edge }), ptr }
             }
         })
     }
 
     pub(crate) fn iter_mut_from_raw<'id : 'a, Iter : 'a, E: 'a>(&'a mut self, src : GraphPtr<'id, NodeType>, iter : Iter)
-        -> impl Iterator<Item = GraphIterRes<Edge<&'a mut N, &'a mut E>, GraphPtr<'id, NodeType>>>
+        -> impl Iterator<Item = GraphItem<Edge<&'a mut N, &'a mut E>, GraphPtr<'id, NodeType>>>
     where Iter : Iterator<Item = (*mut NodeType, &'a mut E)>
     {
         let g = src._guard;
         let current = src.as_mut();
         // (E)
         iter.map(move |x| {
-            let ptr = x.0;
+            let p = x.0;
+            let edge = x.1;
             //(W)
-            let p =  unsafe { GraphPtr::from_mut(ptr, g) };
-            let that = unsafe { (*ptr).get_mut() };
+            let ptr =  unsafe { GraphPtr::from_mut(p, g) };
+            let that = unsafe { (*p).get_mut() };
 
-            if current == ptr {
-                GraphIterRes { values : Loop(EdgeLoop { this : that, edge : x.1}), ptr : p }
+            if current == p {
+                GraphItem { values : Loop(EdgeLoop { this : that, edge}), ptr }
             } else {
                 //aliasing was explicitly checked
                 let this = unsafe { (*current).get_mut() };
-                GraphIterRes { values : Both(EdgeBoth { this, that, edge : x.1 }), ptr : p }
+                GraphItem { values : Both(EdgeBoth { this, that, edge}), ptr  }
             }
         })
     }
@@ -178,113 +232,154 @@ where NodeType : GraphNode<Node = N>
 
 impl <N, E> GraphRaw<NamedNode<N, E>>
 {
-    pub(crate) fn bridge<'id>(&mut self, src : GraphPtr<'id, NamedNode<N, E>>,
-                                         dst : GraphPtr<'id, NamedNode<N, E>>)
-        -> Option<(&'_ mut node_views::NamedNode<'id, N, E>, &'_ mut node_views::NamedNode<'id, N, E>)>
-    {
-        if src != dst { 
-            //this transmute only affects lifetime parameter
-            let src = unsafe { (*src.as_mut()).get_view_mut() };
-            let dst = self.get_view_mut(dst);
-            Some((src, dst))
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn get_edge<'id>(&self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>) -> Option<Edge<&'_ N, &'_ E>>
+    pub(crate) fn get_edge<'id>(&self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>)
+               -> Option<Edge<&'_ N, &'_ E>>
     {
         //(E)
-        let (this_refs, this) = unsafe {
-            let n = &(*src.as_ptr()).internal;
-            (&n.refs, &n.data)
-        };
+        let src_refs = unsafe { &(*src.as_ptr()).internal.refs };
 
         let s_dst = dst.into_static();
-
-        if let Some(e) = this_refs.get(&s_dst) {
-            if src == dst {
-                Some(Loop(EdgeLoop { this, edge : &e }))
-            } else {
-                let that = self.get(dst);
-                Some(Both(EdgeBoth { this, that, edge : &e }))
-            }
+        if let Some(e) = src_refs.get(&s_dst) {
+            Some(self.get_edge_raw(src, dst, e))
         } else {
             None
         }
     }
 
     pub(crate) fn get_edge_mut<'id>(&mut self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>)
-                  -> Option<Edge<&'_ mut N, &'_ mut E>>
+               -> Option<Edge<&'_ mut N, &'_ mut E>>
     {
         //(E)
-        //aliasing check will be required in order to not violate (*) invariants
-        let (this_refs, this) = unsafe {
-            let n = &mut (*src.as_mut()).internal;
-            (&mut n.refs, &mut n.data)
-        };
+        let src_refs = unsafe { &mut (*src.as_mut()).internal.refs };
 
         let s_dst = dst.into_static();
-
-        if let Some(e) = this_refs.get_mut(&s_dst) {
-            if src == dst {
-                Some(Loop(EdgeLoop { this, edge : e }))
-            } else {
-                let that = self.get_mut(dst); // (*)
-                Some(Both(EdgeBoth { this, that, edge : e }))
-            }
+        if let Some(e) = src_refs.get_mut(&s_dst) {
+            Some(self.get_edge_mut_raw(src, dst, e))
         } else {
             None
         }
     }
 }
 
-
-
-impl <N, E> GraphRaw<NamedNode<N, E>>
+impl <N, E> GraphRaw<VecNode<N, E>>
 {
-
-    pub(crate) fn get_view<'id>(&self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &node_views::NamedNode<'id, N, E>
+    pub(crate) fn get_edge<'id>(&self, src : GraphPtr<'id, VecNode<N, E>>, dst : usize)
+               -> Option<Edge<&'_ N, &'_ E>>
     {
         //(E)
-        unsafe {
-            (*dst.as_ptr()).get_view()
+        let src_refs = unsafe { &(*src.as_ptr()).internal.refs };
+        if dst < src_refs.len() {
+            let dst = &src_refs[dst];
+            let d = unsafe { transmute(dst.0) };
+            Some(self.get_edge_raw(src, d, &dst.1))
+        } else {
+            None
         }
     }
 
-    pub(crate) fn get_view_mut<'id>(&mut self, dst : GraphPtr<'id, NamedNode<N, E>>) -> &mut node_views::NamedNode<'id, N, E>
+    pub(crate) fn get_edge_mut<'id>(&mut self, src : GraphPtr<'id, VecNode<N, E>>, dst : usize)
+               -> Option<Edge<&'_ mut N, &'_ mut E>>
     {
         //(E)
-        unsafe {
-            (*dst.as_mut()).get_view_mut()
+        let src_refs = unsafe { &mut (*src.as_mut()).internal.refs };
+        if dst < src_refs.len() {
+            let dst = &mut src_refs[dst];
+            let d = unsafe { transmute(dst.0) };
+            Some(self.get_edge_mut_raw(src, d, &mut dst.1))
+        } else {
+            None
         }
-    }
-
-    pub(crate) fn iter<'a, 'id : 'a>(&'a self, dst : GraphPtr<'id, NamedNode<N, E>>)
-        -> impl Iterator<Item = GraphIterRes<Edge<&'a N, &'a E>, GraphPtr<'id, NamedNode<N, E>>>>
-    {
-        //(E)
-        let current = dst.as_ptr();
-        let node_refs = unsafe { &(*current).internal.refs };
-        self.iter_from_raw(dst, node_refs.iter().map(|x| {
-            let p = x.0.as_ptr();
-            (p, x.1)
-        }))
-    }
-
-    pub(crate) fn iter_mut<'a, 'id : 'a>(&'a mut self, src : GraphPtr<'id, NamedNode<N, E>>)
-        -> impl Iterator<Item = GraphIterRes<Edge<&'a mut N, &'a mut E>, GraphPtr<'id, NamedNode<N, E>>>>
-    {
-        //(E)
-        let current = src.as_mut();
-        //*current is dropped before closure is ever invoked and does not alias
-        let node_refs = unsafe { &mut (*current).internal.refs };
-        self.iter_mut_from_raw(src, node_refs.iter_mut().map(|x| {
-            let p = x.0.as_mut();
-            (p, x.1)
-        }))
     }
 }
+
+impl <N, E> GraphRaw<OptionNode<N, E>>
+{
+    pub(crate) fn get_edge<'id>(&self, src : GraphPtr<'id, OptionNode<N, E>>)
+               -> Option<Edge<&'_ N, &'_ E>>
+    {
+        //(E)
+        let src_refs = unsafe { &(*src.as_ptr()).internal.refs };
+        if let Some(dst) = &*src_refs {
+            let d = unsafe { transmute(dst.0) };
+            Some(self.get_edge_raw(src, d, &dst.1))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn get_edge_mut<'id>(&mut self, src : GraphPtr<'id, OptionNode<N, E>>)
+               -> Option<Edge<&'_ mut N, &'_ mut E>>
+    {
+        //(E)
+        let src_refs = unsafe { &mut (*src.as_mut()).internal.refs };
+        if let Some(dst) = &mut *src_refs {
+            let d = unsafe { transmute(dst.0) };
+            Some(self.get_edge_mut_raw(src, d, &mut dst.1))
+        } else {
+            None
+        }
+    }
+}
+
+macro_rules! impl_graph_raw {
+    ($NodeType:ident, $IterMap:tt, $IterMutMap:tt) => {
+        impl <N, E> GraphRaw<$NodeType<N, E>>
+        {
+            pub(crate) fn bridge<'id>(&mut self, src : GraphPtr<'id, $NodeType<N, E>>,
+                                                 dst : GraphPtr<'id, $NodeType<N, E>>)
+                -> Option<(&'_ mut node_views::$NodeType<'id, N, E>, &'_ mut node_views::$NodeType<'id, N, E>)>
+            {
+                if src != dst { 
+                    //this transmute only affects lifetime parameter
+                    let src = unsafe { (*src.as_mut()).get_view_mut() };
+                    let dst = self.get_view_mut(dst);
+                    Some((src, dst))
+                } else {
+                    None
+                }
+            }
+
+            pub(crate) fn get_view<'id>(&self, dst : GraphPtr<'id, $NodeType<N, E>>) -> &node_views::$NodeType<'id, N, E>
+            {
+                //(E)
+                unsafe {
+                    (*dst.as_ptr()).get_view()
+                }
+            }
+
+            pub(crate) fn get_view_mut<'id>(&mut self, dst : GraphPtr<'id, $NodeType<N, E>>) -> &mut node_views::$NodeType<'id, N, E>
+            {
+                //(E)
+                unsafe {
+                    (*dst.as_mut()).get_view_mut()
+                }
+            }
+
+            pub(crate) fn iter<'a, 'id : 'a>(&'a self, dst : GraphPtr<'id, $NodeType<N, E>>)
+                       -> impl Iterator<Item = GraphItem<Edge<&'a N, &'a E>, GraphPtr<'id, $NodeType<N, E>>>>
+            {
+                //(E)
+                let current = dst.as_ptr();
+                let node_refs = unsafe { &(*current).internal.refs };
+                self.iter_from_raw(dst, node_refs.iter().map($IterMap))
+            }
+
+            pub(crate) fn iter_mut<'a, 'id : 'a>(&'a mut self, src : GraphPtr<'id, $NodeType<N, E>>)
+                        -> impl Iterator<Item = GraphItem<Edge<&'a mut N, &'a mut E>, GraphPtr<'id, $NodeType<N, E>>>>
+            {
+                //(E)
+                let current = src.as_mut();
+                //*current is dropped before closure is ever invoked and does not alias
+                let node_refs = unsafe { &mut (*current).internal.refs };
+                self.iter_mut_from_raw(src, node_refs.iter_mut().map($IterMutMap))
+            }
+        }
+    }
+}
+
+impl_graph_raw!{NamedNode,  {|x| (x.0.as_ptr(),  x.1)}, {|x| (x.0.as_mut(),      x.1)}}
+impl_graph_raw!{VecNode,    {|x| (x.0.as_ptr(), &x.1)}, {|x| (x.0.as_mut(), &mut x.1)}}
+impl_graph_raw!{OptionNode, {|x| (x.0.as_ptr(), &x.1)}, {|x| (x.0.as_mut(), &mut x.1)}}
 
 impl <T> GraphRaw<T> {
     pub(crate) fn new() -> GraphRaw<T>
