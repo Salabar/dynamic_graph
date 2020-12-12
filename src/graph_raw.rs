@@ -62,9 +62,9 @@ where NodeType : GraphNode<Node = N>
 
         unsafe {
             let mut bind = Bind::new();
-            let r = bind.get_mut(ptr);
-            r.meta_mut().store_index = self.data.len();
-            r.meta_mut().cleanup_gen = self.cleanup_gen;
+            let r = bind.get_mut(ptr).meta_mut();
+            r.store_index = self.data.len();
+            r.cleanup_gen = self.cleanup_gen;
         }
 
         self.data.push(node);
@@ -83,15 +83,16 @@ where NodeType : GraphNode<Node = N>
         };
 
         if s.cleanup_gen != self.cleanup_gen {
-
             s.cleanup_gen = self.cleanup_gen;
             let item_index = s.store_index;
             s.store_index = frontier;
 
             let old_frontier = unsafe {
                 assume(|| frontier < self.data.len() && item_index < self.data.len());
-                bind.get_mut(self.data[frontier].as_ptr()).meta_mut()
+                let ptr = self.data[frontier].as_ptr();
+                bind.get_mut(ptr).meta_mut()
             };
+
             old_frontier.store_index = item_index;
 
             self.data.swap(item_index, frontier);
@@ -128,20 +129,21 @@ where NodeType : GraphNode<Node = N>
 
         let item_index = victim.meta().store_index;
 
+        let last = unsafe {
+            let ptr = self.data.last_mut().assume_some().as_ptr();
+            bind.get_mut(ptr)
+        };
+
+        last.meta_mut().store_index = item_index;
+
         unsafe {
             //item_index always points to the current position in the Vec
             assume(|| item_index < self.data.len());
         }
-
-        let last = unsafe {
-            bind.get_mut(self.data.last_mut().assume_some().as_ptr())
-        };
-
-        last.meta_mut().store_index = item_index;
         self.data.swap_remove(item_index);
     }
 
-    pub(crate) fn get_edge_raw<'id, E : 'a>(&'a self, src : GraphPtr<'id, NodeType>, dst : GraphPtr<'id, NodeType>, edge : &'a E)
+    pub(crate) fn get_edge_raw<E : 'a>(&'a self, src : GraphPtr<'static, NodeType>, dst : GraphPtr<'static, NodeType>, edge : &'a E)
                -> Edge<&'a N, &'a E>
     {
         let this = self.get(src);
@@ -153,7 +155,7 @@ where NodeType : GraphNode<Node = N>
         }
     }
 
-    pub(crate) fn get_edge_mut_raw<'id, E : 'a>(&'a mut self, src : GraphPtr<'id, NodeType>, dst : GraphPtr<'id, NodeType>, edge : &'a mut E)
+    pub(crate) fn get_edge_mut_raw<E : 'a>(&'a mut self, src : GraphPtr<'static, NodeType>, dst : GraphPtr<'static, NodeType>, edge : &'a mut E)
                -> Edge<&'a mut N, &'a mut E>
     {
         let this = self.get_mut(src);
@@ -214,13 +216,14 @@ where NodeType : GraphNode<Node = N>
 
     pub(crate) fn cleanup_precise<'id>(&mut self, root : &impl RootCollection<'id, NodeType>)
     {
+        let mut bind = Bind::new();
         self.cleanup_gen.flip();
         let mut state = CleanupState { parent : self, index : 0, queue : VecDeque::new() };
         RootCollection::traverse(root, &mut state);
 
         while let Some(q) = state.queue.pop_front() {
             unsafe {
-                (*q).traverse(&mut state);
+                bind.get_mut(q).traverse(&mut state);
             }
         }
         //Every accessible node is stored before index.
@@ -236,28 +239,26 @@ impl <N, E> GraphRaw<NamedNode<N, E>>
                -> Option<Edge<&'_ N, &'_ E>>
     {
         //(E)
+        let src = src.into_static();
+        let dst = dst.into_static();
+
         let src_refs = unsafe { &(*src.as_ptr()).internal.refs };
 
-        let s_dst = dst.into_static();
-        if let Some(e) = src_refs.get(&s_dst) {
-            Some(self.get_edge_raw(src, dst, e))
-        } else {
-            None
-        }
+        src_refs.get(&dst)
+                .map(move |e| self.get_edge_raw(src, dst, e))
     }
 
     pub(crate) fn get_edge_mut<'id>(&mut self, src : GraphPtr<'id, NamedNode<N, E>>, dst : GraphPtr<'id, NamedNode<N, E>>)
                -> Option<Edge<&'_ mut N, &'_ mut E>>
     {
         //(E)
+        let src = src.into_static();
+        let dst = dst.into_static();
+
         let src_refs = unsafe { &mut (*src.as_mut()).internal.refs };
 
-        let s_dst = dst.into_static();
-        if let Some(e) = src_refs.get_mut(&s_dst) {
-            Some(self.get_edge_mut_raw(src, dst, e))
-        } else {
-            None
-        }
+        src_refs.get_mut(&dst)
+                .map(move |e| self.get_edge_mut_raw(src, dst, e))
     }
 }
 
@@ -267,28 +268,20 @@ impl <N, E> GraphRaw<VecNode<N, E>>
                -> Option<Edge<&'_ N, &'_ E>>
     {
         //(E)
+        let src = src.into_static();
         let src_refs = unsafe { &(*src.as_ptr()).internal.refs };
-        if dst < src_refs.len() {
-            let dst = &src_refs[dst];
-            let d = unsafe { transmute(dst.0) };
-            Some(self.get_edge_raw(src, d, &dst.1))
-        } else {
-            None
-        }
+        src_refs.get(dst)
+                .map(move |x| self.get_edge_raw(src, x.0, &x.1))
     }
 
     pub(crate) fn get_edge_mut<'id>(&mut self, src : GraphPtr<'id, VecNode<N, E>>, dst : usize)
                -> Option<Edge<&'_ mut N, &'_ mut E>>
     {
         //(E)
+        let src = src.into_static();
         let src_refs = unsafe { &mut (*src.as_mut()).internal.refs };
-        if dst < src_refs.len() {
-            let dst = &mut src_refs[dst];
-            let d = unsafe { transmute(dst.0) };
-            Some(self.get_edge_mut_raw(src, d, &mut dst.1))
-        } else {
-            None
-        }
+        src_refs.get_mut(dst)
+                .map(move |x| self.get_edge_mut_raw(src, x.0, &mut x.1))
     }
 }
 
@@ -298,26 +291,20 @@ impl <N, E> GraphRaw<OptionNode<N, E>>
                -> Option<Edge<&'_ N, &'_ E>>
     {
         //(E)
-        let src_refs = unsafe { &(*src.as_ptr()).internal.refs };
-        if let Some(dst) = &*src_refs {
-            let d = unsafe { transmute(dst.0) };
-            Some(self.get_edge_raw(src, d, &dst.1))
-        } else {
-            None
-        }
+        let src = src.into_static();
+        let src_refs = unsafe { (*src.as_ptr()).internal.refs.as_ref() };
+        src_refs.map(move |x| self
+                .get_edge_raw(src, x.0, &x.1))
     }
 
     pub(crate) fn get_edge_mut<'id>(&mut self, src : GraphPtr<'id, OptionNode<N, E>>)
                -> Option<Edge<&'_ mut N, &'_ mut E>>
     {
         //(E)
-        let src_refs = unsafe { &mut (*src.as_mut()).internal.refs };
-        if let Some(dst) = &mut *src_refs {
-            let d = unsafe { transmute(dst.0) };
-            Some(self.get_edge_mut_raw(src, d, &mut dst.1))
-        } else {
-            None
-        }
+        let src = src.into_static();
+        let src_refs = unsafe { (*src.as_mut()).internal.refs.as_mut() };
+        src_refs.map(move |x| self
+                .get_edge_mut_raw(src, x.0, &mut x.1))
     }
 }
 

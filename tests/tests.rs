@@ -184,9 +184,11 @@ fn test_kill_smoke() {
     let mut graph = VecGraph::<NamedNode<_, ()>>::new();
     anchor_mut!(graph, AlwaysPrecise);
 
-    let source = graph.spawn(0);
+    let v1 = graph.spawn(1);
+    let v2 = graph.spawn(2);
     unsafe {
-        graph.kill(source);
+        graph.kill(v1);
+        graph.kill(v2);
     }
 }
 
