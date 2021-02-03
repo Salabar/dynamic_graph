@@ -69,6 +69,15 @@ where Root : RootCollection<'static, NodeType>,
     {
         AnchorMut { parent : self, _guard : guard, strategy }
     }
+
+    /// Creates an Anchor from a generativity brand.
+    /// Prefer `anchor!` macro in application code.
+    /// # Safety
+    /// Caller must use a unique `guard` from generativity::Guard.
+    pub unsafe fn anchor<'id>(&self, guard : Id<'id>) -> Anchor<'_, 'id, GenericGraph<Root, NodeType>>
+    {
+        Anchor { parent : self, _guard : guard }
+    }
 }
 
 pub type VecGraph<T> = GenericGraph<RootVec<'static, T>, T>;
@@ -95,7 +104,6 @@ pub struct Anchor<'this, 'id, T : 'this>
 where T : GraphImpl
 {
     parent: &'this T,
-    strategy : CleanupStrategy,
     _guard : Id<'id>,
 }
 
@@ -693,5 +701,19 @@ macro_rules! anchor_mut
     ($name:ident, $parent:tt, $strategy:tt) => {
         make_guard!(g);
         let mut $name = unsafe { $parent.anchor_mut(Id::from(g), $strategy) };
+    };
+}
+
+#[macro_export]
+/// Creates an Anchor.
+macro_rules! anchor
+{
+    ($name:ident) => {
+        make_guard!(g);
+        let mut $name = unsafe { $name.anchor(Id::from(g))   };
+    };
+    ($name:ident, $parent:tt) => {
+        make_guard!(g);
+        let mut $name = unsafe { $parent.anchor(Id::from(g)) };
     };
 }

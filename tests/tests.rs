@@ -192,6 +192,13 @@ fn test_kill_smoke() {
     }
 }
 
+#[test]
+fn test_ro_anchor_smoke() {
+    let graph = VecGraph::<NamedNode<i32, i32>>::new();
+    anchor!(anch, graph);
+    anchor!(graph);
+}
+
 
 struct FlowEdge {
     capacity : i32,
