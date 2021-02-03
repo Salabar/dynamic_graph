@@ -308,6 +308,29 @@ impl <N, E> GraphRaw<OptionNode<N, E>>
     }
 }
 
+impl <K, N, E> GraphRaw<TreeNode<K, N, E>> where K : Ord
+{
+    pub(crate) fn get_edge<'id>(&self, src : GraphPtr<'id, TreeNode<K, N, E>>, dst : &K)
+               -> Option<Edge<&'_ N, &'_ E>>
+    {
+        //(E)
+        let src = src.into_static();
+        let src_refs = unsafe { &(*src.as_ptr()).internal.refs };
+        src_refs.get(dst).map(move |x| self
+                .get_edge_raw(src, x.0, &x.1))
+    }
+
+    pub(crate) fn get_edge_mut<'id>(&mut self, src : GraphPtr<'id, TreeNode<K, N, E>>, dst : &K)
+               -> Option<Edge<&'_ mut N, &'_ mut E>>
+    {
+        //(E)
+        let src = src.into_static();
+        let src_refs = unsafe { &mut (*src.as_mut()).internal.refs };
+        src_refs.get_mut(dst).map(move |x| self
+                .get_edge_mut_raw(src, x.0, &mut x.1))
+    }
+}
+
 macro_rules! impl_graph_raw {
     ($NodeType:ident, $IterMap:tt, $IterMutMap:tt) => {
         impl <N, E> GraphRaw<$NodeType<N, E>>
@@ -367,6 +390,63 @@ macro_rules! impl_graph_raw {
 impl_graph_raw!{NamedNode,  {|x| (x.0.as_ptr(),  x.1)}, {|x| (x.0.as_mut(),      x.1)}}
 impl_graph_raw!{VecNode,    {|x| (x.0.as_ptr(), &x.1)}, {|x| (x.0.as_mut(), &mut x.1)}}
 impl_graph_raw!{OptionNode, {|x| (x.0.as_ptr(), &x.1)}, {|x| (x.0.as_mut(), &mut x.1)}}
+
+
+impl <K, N, E> GraphRaw<TreeNode<K, N, E>> where K : Ord
+{
+    pub(crate) fn bridge<'id>(&mut self, src : GraphPtr<'id, TreeNode<K, N, E>>,
+                                         dst : GraphPtr<'id, TreeNode<K, N, E>>)
+        -> Option<(&'_ mut node_views::TreeNode<'id, K, N, E>, &'_ mut node_views::TreeNode<'id, K, N, E>)>
+    {
+        if src != dst { 
+            //this transmute only affects lifetime parameter
+            let src = unsafe { (*src.as_mut()).get_view_mut() };
+            let dst = self.get_view_mut(dst);
+            Some((src, dst))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn get_view<'id>(&self, dst : GraphPtr<'id, TreeNode<K, N, E>>) -> &node_views::TreeNode<'id, K, N, E>
+    {
+        //(E)
+        unsafe {
+            (*dst.as_ptr()).get_view()
+        }
+    }
+
+    pub(crate) fn get_view_mut<'id>(&mut self, dst : GraphPtr<'id, TreeNode<K, N, E>>) -> &mut node_views::TreeNode<'id, K, N, E>
+    {
+        //(E)
+        unsafe {
+            (*dst.as_mut()).get_view_mut()
+        }
+    }
+
+    pub(crate) fn iter<'a, 'id : 'a>(&'a self, dst : GraphPtr<'id, TreeNode<K, N, E>>)
+               -> impl Iterator<Item = GraphItem<Edge<&'a N, &'a E>, GraphPtr<'id, TreeNode<K, N, E>>>>
+    {
+        //(E)
+        let current = dst.as_ptr();
+        let node_refs = unsafe { &(*current).internal.refs };
+        let iter = node_refs.values().map(|x| (x.0.as_ptr(), &x.1));
+        self.iter_from_raw(dst, iter)
+    }
+
+    pub(crate) fn iter_mut<'a, 'id : 'a>(&'a mut self, src : GraphPtr<'id, TreeNode<K, N, E>>)
+                -> impl Iterator<Item = GraphItem<Edge<&'a mut N, &'a mut E>, GraphPtr<'id, TreeNode<K, N, E>>>>
+    {
+        //(E)
+        let current = src.as_mut();
+        //*current is dropped before closure is ever invoked and does not alias
+        let node_refs = unsafe { &mut (*current).internal.refs };
+        let iter = node_refs.values_mut().map(|x| (x.0.as_mut(), &mut x.1));
+        self.iter_mut_from_raw(src, iter)
+    }
+
+    
+}
 
 impl <T> GraphRaw<T> {
     pub(crate) fn new() -> GraphRaw<T>

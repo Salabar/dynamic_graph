@@ -187,14 +187,6 @@ pub unsafe trait NodeCollection<'id, NodeType : GraphNode> : Default {
     fn traverse(this : &Self, cleanup : &mut CleanupState<NodeType>);
 }
 
-pub trait TrivialNodeCollection<'id, NodeType : GraphNode> : NodeCollection<'id, NodeType> {
-    type Key;
-    type Edge;
-
-    fn _get(&self, key : Self::Key) -> Option<(GraphPtr<'id, NodeType>, &Self::Edge)>;
-    fn _get_mut(&mut self, key : Self::Key) -> Option<(GraphPtr<'id, NodeType>, &mut Self::Edge)>;
-}
-
 pub unsafe trait RootCollection<'id, NodeType : GraphNode> : Default {
     fn traverse(this : &Self, cleanup : &mut CleanupState<NodeType>);
 }
@@ -253,43 +245,9 @@ macro_rules! impl_node_collection {
     }
 }
 
-
 impl_node_collection!{NodeVec}
 impl_node_collection!{NodeNamedMap}
 impl_node_collection!{NodeOption}
-
-impl <'id, NodeType, E> TrivialNodeCollection<'id, NodeType> for NodeNamedMap<'id, NodeType, E>
-where NodeType : GraphNode
-{
-    type Key = GraphPtr<'id, NodeType>;
-    type Edge = E;
-
-    fn _get(&self, key : Self::Key) -> Option<(GraphPtr<'id, NodeType>, &Self::Edge)> {
-        self.get(&key).map(move |x| (key, x))
-    }
-
-    fn _get_mut(&mut self, key : Self::Key) -> Option<(GraphPtr<'id, NodeType>, &mut Self::Edge)> {
-        self.get_mut(&key).map(move |x| (key, x))
-    }
-}
-
-impl <'id, NodeType, E> TrivialNodeCollection<'id, NodeType> for NodeVec<'id, NodeType, E>
-where NodeType : GraphNode
-{
-    type Key = usize;
-    type Edge = E;
-
-    fn _get(&self, key : Self::Key) -> Option<(GraphPtr<'id, NodeType>, &Self::Edge)> {
-        self.get(key).map(|x| (x.0, &x.1))
-    }
-
-    fn _get_mut(&mut self, key : Self::Key) -> Option<(GraphPtr<'id, NodeType>, &mut Self::Edge)> {
-        self.get_mut(key).map(|x| (x.0, &mut x.1))
-    }
-}
-
-
-
 
 unsafe impl <'id, K, NodeType, E> NodeCollection<'id, NodeType> for NodeTreeMap<'id, K, NodeType, E>
 where NodeType : GraphNode,
