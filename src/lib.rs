@@ -81,8 +81,6 @@ pub enum CleanupStrategy {
     Never,
     /// AnchorMut always performs cleanup when dropped
     Always,
-    /// AnchorMut always performs precise cleanup when dropped
-    AlwaysPrecise
 }
 
 pub struct AnchorMut<'this, 'id, T : 'this>
@@ -116,7 +114,6 @@ where T : GraphImpl
 {
     fn drop(&mut self) {
         match &self.strategy {
-            CleanupStrategy::AlwaysPrecise => self.parent.cleanup_precise(),
             CleanupStrategy::Always => self.parent.cleanup(),
             _ => ()
         }
@@ -143,7 +140,7 @@ macro_rules! impl_anchor_index {
         {
             /// Returns an iterator over edges attached to `src` node.
             pub fn edges(&self, src : GraphPtr<'id, $NodeType<N, E>>) ->
-                impl Iterator<Item = GraphItem<Edge<&'this N, &'this E>, GraphPtr<'id, $NodeType<N, E>>>>
+                impl Iterator<Item = GraphItem<Edge<&'_ N, &'_ E>, GraphPtr<'id, $NodeType<N, E>>>>
             {
                 self.internal().iter(src)
             }
@@ -174,7 +171,7 @@ where Root : RootCollection<'static, TreeNode<K, N, E>>, K : Ord
 {
     /// Returns an iterator over edges attached to `src` node.
     pub fn edges(&self, src : GraphPtr<'id, TreeNode<K, N, E>>) ->
-        impl Iterator<Item = GraphItem<Edge<&'this N, &'this E>, GraphPtr<'id, TreeNode<K, N, E>>>>
+        impl Iterator<Item = GraphItem<Edge<&'_ N, &'_ E>, GraphPtr<'id, TreeNode<K, N, E>>>>
     {
         self.internal().iter(src)
     }
@@ -661,6 +658,20 @@ macro_rules! impl_generic_graph_root {
                 //this transmute only affects lifetime parameter
                 unsafe {
                     transmute(&mut self.parent.root)
+                }
+            }
+        }
+
+        impl <'this, 'id, N : 'this, NodeType : 'this>
+        Anchor<'this, 'id, $graph<NodeType>>
+        where NodeType : GraphNode<Node = N>
+        {
+            /// Provides direct access to the collection of the root.
+            pub fn root(&self) -> &$collection<'id, NodeType>
+            {
+                //this transmute only affects lifetime parameter
+                unsafe {
+                    transmute(&self.parent.root)
                 }
             }
         }

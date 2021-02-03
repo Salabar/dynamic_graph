@@ -11,7 +11,7 @@ struct BfsNode {
 }
 
 fn breadth_first_search(graph : &mut VecGraph<NamedNode<BfsNode, ()>>) {
-    anchor_mut!(graph, AlwaysPrecise);
+    anchor_mut!(graph, Always);
 
     let root =  graph.root()[0];
     let mut cursor = graph.cursor_mut(root);
@@ -182,7 +182,7 @@ fn shortest_path_test() {
 #[test]
 fn test_kill_smoke() {
     let mut graph = VecGraph::<NamedNode<_, ()>>::new();
-    anchor_mut!(graph, AlwaysPrecise);
+    anchor_mut!(graph, Always);
 
     let v1 = graph.spawn(1);
     let v2 = graph.spawn(2);
@@ -232,7 +232,7 @@ fn find_path<'id>(graph : &AnchorMut<'_, 'id, VecGraph<FlowNode>>)
 }
 
 fn edmonds_karp(graph : &mut VecGraph<FlowNode>) -> i32 {
-    anchor_mut!(graph, AlwaysPrecise);
+    anchor_mut!(graph, Always);
 
     let root = graph.root();
 
@@ -272,7 +272,7 @@ fn test_max_flow() {
     let mut graph = VecGraph::<NamedNode<_, _>>::new();
     {
         //Thomas Cormen, Introduction to Algorithms 2e, pic. 26.5
-        anchor_mut!(graph, AlwaysPrecise);
+        anchor_mut!(graph, Always);
         let source = graph.spawn(());
         let sink   = graph.spawn(());
 
