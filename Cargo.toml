@@ -1,6 +1,6 @@
 [package]
 name = "dynamic_graph"
-version = "0.0.4"
+version = "0.1.4"
 authors = ["Maskim Chistyakov"]
 edition = "2018"
 license = "MIT"
@@ -10,6 +10,6 @@ readme = "README.md"
 
 [dependencies]
 generativity = "1.0.0"
-unsafer = "0.1.0"
+unsafer = "0.1.1"
 [profile.dev]
 opt-level = 0
